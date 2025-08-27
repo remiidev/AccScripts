@@ -11,7 +11,7 @@ var
 
 
 begin
-  Login.AddPlayer('belentokyo@gmail.com', 'Remerexosrs123');
+  Login.AddPlayer();
   Login.PlayerIndex := High(Login.Players);
   if (not RSClient.IsLoggedIn) then
     if Login.GetPlayer.Password <> '' then
