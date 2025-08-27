@@ -1,0 +1,234 @@
+{$IFNDEF SCRIPT_CHAIN}
+{$I SRL-T/osr.simba}
+{$I WaspLib/osr.simba}
+{$ENDIF}
+
+type
+  EComposterState = (OPEN_BANK, WITHDRAW_MATS, CLOSE_INTERFACE, HANDLE_WARNING, CLOSE_CONTEXT, DEPOSIT, DO_COMPOST, BREAK, END_SCRIPT);
+
+  TComposter = record (TBaseWalkerScript)
+    State       : EComposterState;
+    Volcanic_ash: TRSBankItem;
+    Supercompost: TRSBankItem;
+    Ultracompost: TRSBankItem;
+  end;
+
+
+{===========================================}
+{            SCRIPT/BOT METHODS             }
+{===========================================}
+
+//DEPOSIT
+function TComposter.Deposit(): Boolean;
+begin
+  Bank.Open(ERSBankLocation.CASTLE_WARS);
+  if Bank.DepositItem(Self.Ultracompost, True) then
+  begin
+    Result := WaitUntil(not Inventory.ContainsItem(Self.Ultracompost.Item), 200, 600);
+  end;
+  writeln('Ultracompost Depositado');
+  Self.TotalActions += 27;
+end;
+
+//COMPOST
+procedure TComposter.Compost();
+var
+  i: Int32
+begin
+  i := Inventory.CountItemStack('Volcanic ash');
+
+  if srl.Dice(92) then
+  begin
+    Inventory.use(0,4);
+  end else
+  begin
+    Inventory.use(Self.Volcanic_ash.Item, Self.Supercompost.Item);
+  end;
+
+  Waituntil(Make.IsOpen, 200, 5000);
+
+  if Make.IsOpen(260, 2500) then
+  begin
+    keyboard.PressKey(32);
+  end;
+  while (Inventory.CountItemStack('Volcanic ash') > i - 44) do
+  begin
+    wait(800, 1400);
+    Antiban.DoAntiban();
+  end;
+  Bank.Hover(ERSBankLocation.CASTLE_WARS, False);
+  Waituntil((Inventory.CountItemStack('Volcanic ash') = i - 54), 400, 7000);
+  writeln('Done composting');
+end;
+
+//WITHDRAW MATS
+procedure TComposter.WithdrawMats();
+begin
+  ItemFinder.Similarity := 0.99;
+
+  Bank.Open(ERSBankLocation.CASTLE_WARS);
+
+  if not Inventory.ContainsItem(Self.Volcanic_ash.item) then
+    Bank.WithdrawItem(Self.Volcanic_ash, True);
+  if not Inventory.ContainsItem(Self.Supercompost.item) then
+    Bank.WithdrawItem('Supercompost', True);
+
+  WaitUntil(Inventory.ContainsItem(Self.Supercompost.Item), 100, 10000);
+  Bank.Close();
+  ItemFinder.Similarity := 1;
+end;
+
+
+//{$IFNDEF SCRIPT_CHAIN}
+//Extra antiban specifically for this script.
+//ANTIBAN
+procedure TComposter.SetupAntiban();
+begin
+  Mouse.Speed := 10 + Antiban.GetBehavior(EBioBehavior.MOUSE_SPEED);
+
+  antiban.Skills := [ERSSkill.STRENGTH, ERSSkill.ATTACK, ERSSkill.DEFENCE];
+
+  antiban.MinZoom := 90;
+  antiban.MaxZoom := 95;
+
+  antiban.AddTask((15000), @ Antiban.HoverSkills);
+
+  antiban.AddBreak(ONE_MINUTE * 18, ONE_SECOND * 40, 0.2, 0.0);
+
+  writeln('Mouse speed: ', mouse.speed);
+end;
+//{$ENDIF}
+{===========================================}
+{               GET STATE                   }
+{===========================================}
+//GET STATE
+function TComposter.GetState(): EComposterState;
+begin
+  ItemFinder.Similarity := 1;
+  writeln('Supercompost: ', Inventory.CountItem('Supercompost'));
+  writeln('Ultracompost: ', Inventory.Countitem(self.ultracompost.Item));
+  writeln('Antiban Tasks: ', Antiban.Tasks);
+
+  if Inventory.ContainsItem(Self.Supercompost.Item) then
+    Exit(EComposterState.DO_COMPOST);
+
+  if Inventory.ContainsItem(Self.Ultracompost.Item) then
+    Exit(EComposterState.DEPOSIT);
+
+  if MainScreen.HasInterface() then
+  begin
+    if Bank.IsOpen() then
+    begin
+      if Inventory.ContainsItem(Self.Ultracompost.Item) then
+        Exit(EComposterState.DEPOSIT);
+
+      if not Inventory.ContainsItem(Self.Volcanic_ash.Item) or not Inventory.ContainsItem(Self.Supercompost.Item) then
+        Exit(EComposterState.WITHDRAW_MATS);
+    end;
+    Exit(EComposterState.CLOSE_INTERFACE);
+  end;
+
+  if not Inventory.ContainsItem(Self.Volcanic_ash.Item) then
+    Exit(EComposterState.WITHDRAW_MATS);
+
+  if not Inventory.ContainsItem(Self.Supercompost.Item) then
+    Exit(EComposterState.WITHDRAW_MATS);
+
+  if Chat.HasContinue() then
+    Exit(EComposterState.HANDLE_WARNING);
+
+end;
+
+var
+  Composter: TComposter;
+{===========================================}
+{                     INIT                  }
+{===========================================}
+procedure TComposter.Init(MaxActions: UInt32; MaxTime: UInt64); override;
+begin
+  //Options.SetZoomLevel(90);
+  Inherited;
+  ItemFinder.Similarity := 1;
+  Self.Volcanic_ash := ['Volcanic ash', - 1, False, 4, 0];
+  Self.Supercompost := ['Supercompost', - 1, False, 4, 0];
+  Self.Ultracompost := ['Ultracompost', BANK_DEPOSIT_ALL, False, 4, 0];
+  WLSettings.RemoteInput.HUDReport := False;
+  Self.RSW.setup([RSRegions.CASTLE_WARS]);
+
+  Self.SetupAntiban;
+
+  Self.RSW.webwalk([5166, 4117], 10);
+  if Bank.open() then
+  begin
+    Bank.DepositAll();
+    wait(200, 300);
+    Mouse.click([467, 299, 493, 325], 1);
+  end;
+
+end;
+
+{===========================================}
+{                     RUN(S)                }
+{===========================================}
+  //RUN
+procedure TComposter.Run();
+begin
+  State := Self.GetState();
+  Self.SetAction(ToStr(State));
+
+  while ((Self.TimeRunning.ElapsedTime < Self.TimeLimit) and (Self.TotalActions < Self.ActionLimit)) do
+  begin
+  State := Self.GetState();
+  Self.SetAction(ToStr(State));
+    case State of
+      EComposterState.OPEN_BANK: Bank.Open(ERSBankLocation.CASTLE_WARS);
+      EComposterState.WITHDRAW_MATS: Self.WithdrawMats();
+      EComposterState.CLOSE_INTERFACE: MainScreen.CloseInterface();
+      EComposterState.DO_COMPOST: Self.Compost();
+      EComposterState.DEPOSIT: Self.Deposit();
+    end;
+  end;
+end;
+
+procedure TComposter.ChainerRun(maxActions, maxTime: Uint32);
+begin
+  writeln('STARTING COMPOSTER CHAINER RUN');
+  Self.Init(maxactions, maxtime);
+  repeat
+    begin
+      Self.Run();
+    end;
+  until ((Self.TimeRunning.ElapsedTime >= Self.TimeLimit) or (Self.TotalActions >= Self.ActionLimit));
+
+  while (Inventory.Count >= 1) do
+  begin
+    writeln('inv count:');
+    writeln(Inventory.Count());
+    wait(1000, 3000);
+    Self.RSW.webwalk([5166, 4115]);
+    if Bank.open() then
+    begin
+      Bank.DepositAll();
+      wait(200, 300);
+      Mouse.click([467, 299, 493, 325], 1);
+    end;
+  end;
+
+
+  Itemfinder.Similarity := 0.999;
+  Self.RSW.Free();
+  Antiban.Tasks := [];
+  Antiban.Breaks := [];
+  writeln('COOK_RATION CHAINER RUN DONE ----------');
+end;
+
+
+{$IFNDEF SCRIPT_CHAIN}
+begin
+  Composter.Init(1600, - 1);
+  repeat
+    Composter.Run();
+  until (Composter.ActionLimit < Composter.TotalActions);
+end.
+{$ENDIF}
+

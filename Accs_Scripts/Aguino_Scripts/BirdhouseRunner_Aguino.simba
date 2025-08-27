@@ -1,0 +1,516 @@
+{$IFNDEF SCRIPT_CHAIN}
+  {$I SRL-T/osr.simba}
+  {$I WaspLib/osr.simba}
+{$ENDIF}
+{$include_once ../Scripts/Accs_Scripts/RemiLib.simba}
+type
+  ERunnerState = (
+    TRAVEL,
+    EMPTY,
+    BUILD,
+    FEED,
+    NEXT_HOUSE
+  );
+
+  EBirdhouseTravelMethod =(
+    FIRST_HOUSE,
+    SECOND_HOUSE,
+    THIRD_HOUSE,
+    FOURTH_HOUSE
+  );
+
+type
+  THouse = record
+    TravelMethod                    : EBirdhouseTravelMethod;
+    Coords                          : TPoint;
+    Color                           : TCTS2Color;
+    House                           : TRSObject;
+    Traveled                        : Boolean;
+    Completed                       : Boolean;
+    Fed                             : Boolean;
+    Wasemptyed                      : Boolean;
+    Built                           : Boolean;
+  end;
+
+  TRunner = record
+    State                           : ERunnerState;
+
+    MushTree                        : TRSObject;
+    MushTree2                       : TRSObject;
+    Houses                          : array of THouse;
+    CurrentHouse                    : THouse;
+    Hole                            : TRSObject;
+
+    HouseNumber                     : Int32;
+    RunCompleted                    : Boolean;
+    isSetup                         : Boolean;
+
+    RSW                             : TRSWalker;
+  end;
+
+var
+  Runner : TRunner;
+  House1 : THouse;
+  House2 : THouse;
+  House3 : THouse;
+  House4 : THouse;
+
+procedure TRunner.Travel();
+var
+  mypos_ : TPoint;
+  mybox  : Tbox;
+begin
+
+  writeln('Traveling to ', self.CurrentHouse.TravelMethod);
+  case Self.CurrentHouse.TravelMethod of
+    EBirdhouseTravelMethod.FIRST_HOUSE:
+    begin
+      MushTree.WalkClick(True,2);
+      mypos_ := rsw.GetMyPos();
+      WaitUntil(MainScreen.HasInterface(),200,6000);
+      waitEx(250, 50);
+      keyboard.Send('2');
+      Waituntil(RSRegions.FOSSIL_ISLAND.Contains(Self.RSW.GetMyPos()), 300, 10000);
+      waitEx(250, 50);
+      inventory.open();
+      Self.rsw.WebWalk([9468,1255], 120);
+      Self.CurrentHouse.Traveled := True;
+    end;
+
+    EBirdhouseTravelMethod.SECOND_HOUSE:
+    begin
+      Runner.RSW.WebWalk([9449, 1276], 120);
+      Self.CurrentHouse.Traveled := True;
+    end;
+
+    EBirdhouseTravelMethod.THIRD_HOUSE:
+    begin
+      MyBox := [8938, 660, 9335, 1032];
+      writeln('Traveling to third house');
+      MushTree2.WalkClick(True,2);
+      WaitUntil(MainScreen.HasInterface(),200,6000);
+      waitEx(250, 50);
+      keyboard.Send('4');
+      Waituntil(MyBox.Contains(Self.RSW.GetMyPos()), 300, 10000);
+      waitEx(250, 50);
+      Runner.RSW.WebWalk([9105, 767], 65);
+      Self.CurrentHouse.Traveled := True;
+    end;
+
+    EBirdhouseTravelMethod.FOURTH_HOUSE:
+    begin
+      writeln('Traveling to fourth house');
+      Runner.rsw.AdaptiveWalk := True;
+      Runner.RSW.WebWalk([9113, 1036], 65);
+      Runner.rsw.AdaptiveWalk := False;
+      Self.CurrentHouse.Traveled := True;
+    end;
+  end;
+end;
+
+procedure TRunner.empty();
+var
+  MyBox : TBox;
+  ATPA: T2DPointArray;
+  TPA : TPointArray;
+begin
+  repeat
+  begin
+    if Self.CurrentHouse.House.WalkSelectOption(['Empty']) then
+    begin
+      Inventory.MouseItem('Hammer');
+      Waituntil(Inventory.ContainsItem('Clockwork'),180,10000);
+    end;
+  end;
+  until(Inventory.ContainsItem('Clockwork'));
+
+  MyBox := mainscreen.GetPlayerBox();
+  MyBox := MyBox.Expand(40, 40);
+  ATPA := Mainscreen.FindObject(Self.Hole.Finder, MyBox);
+  TPA := ATPA.Biggest();
+  Debug(atpa);
+
+  repeat
+  begin
+    if Inventory.use('Hammer', 'Yew logs') then
+    begin
+      wait(100,180);
+      mouse.HumanMove(tpa.RandomMean);
+      Waituntil(Inventory.ContainsItem('Yew bird house'),150,3000);
+    end;
+  end
+  until(Inventory.ContainsItem('Yew bird house'));
+
+  Self.CurrentHouse.Wasemptyed := True;
+end;
+
+procedure TRunner.Build();
+var
+  MyBox : TBox;
+  ATPA: T2DPointArray;
+  TPA : TPointArray;
+begin
+  MyBox := mainscreen.GetPlayerBox();
+  MyBox := MyBox.Expand(30, 30);
+
+  while not Self.CurrentHouse.Built do
+  begin
+    Self.hole.Find(ATPA);
+    for TPA in ATPA do
+    begin
+      if MyBox.Contains(TPA) then
+      begin
+        mouse.Move(TPA.RandomMean);
+        while not MainScreen.IsUpText('Build') do
+        begin
+          mouse.Move(TPA.RandomMean);
+          wait(400, 600);
+        end;
+        mouse.Click(1);
+        Self.CurrentHouse.Built := True;
+      end;
+    end;
+  end;
+
+  if Inventory.MouseItem('Hammerstone seed') then
+    writeln('Hammerstone seeds hovered, continuing');
+
+  waituntil(not Inventory.ContainsItem('Yew bird house'), 300, 3000);
+  if Inventory.ContainsItem('Yew bird house') then
+    self.CurrentHouse.Built:= False;
+end;
+
+procedure TRunner.Feed();
+var
+  i, slot : int32;
+  TPA : TPointArray;
+  MyBox : TBox;
+  ATPA: T2DPointArray;
+
+begin
+  i := inventory.CountItemStack('Hammerstone seed');
+  MyBox := mainscreen.GetPlayerBox();
+  MyBox := MyBox.Expand(30, 30);
+  Self.CurrentHouse.House.Find(ATPA);
+
+  while not Self.CurrentHouse.Fed do
+  begin
+    if Inventory.SetSelectedItem('Hammerstone seed') then
+    begin
+      for TPA in ATPA do
+      if Self.CurrentHouse.Fed then
+        Break;
+      begin
+        if MyBox.Contains(TPA) then
+        begin
+          mouse.Move(TPA.RandomMean);
+          while not MainScreen.IsUpText('Yew') do
+          begin
+            mouse.Move(TPA);
+            wait(400, 600);
+          end;
+          mouse.Click(1);
+          Self.CurrentHouse.Fed := True;
+          writeln(Self.CurrentHouse.Fed);
+        end;
+      end;
+    end;
+  end;
+  writeln('Salio del while, buscando la diferencia de hammerstone seed');
+  WaitUntil(inventory.CountItemStack('Hammerstone seed') <> i, 300, 4000)
+  if Inventory.CountItemStack('Hammerstone seed') = i then
+    Self.CurrentHouse.Fed := False;
+end;
+
+procedure TRunner.NextHouse();
+begin
+  Self.CurrentHouse.Completed := True;
+  writeln('Finished house number', Self.HouseNumber);
+
+  if (Self.HouseNumber = 3) then
+  begin
+    Self.RunCompleted := True;
+    Exit;
+  end;
+
+  Self.HouseNumber := Self.HouseNumber + 1;
+  writeln('Going for house number', Self.HouseNumber);
+  Self.CurrentHouse := Self.Houses[HouseNumber];
+end;
+
+//RUN
+procedure TRunner.Run();
+begin
+  while not Self.RunCompleted do
+  begin
+    State := Self.GetState();
+    writeln('Doing: ', State);
+    case State of
+      ERunnerState.TRAVEL: Self.Travel();
+      ERunnerState.EMPTY: Self.empty();
+      ERunnerState.BUILD: Self.Build();
+      ERunnerState.FEED: Self.Feed();
+      ERunnerState.NEXT_HOUSE : Self.NextHouse();
+    end;
+  end;
+end;
+
+procedure TRunner.Init();
+var
+  Inventory_ : TRSBankItemArray;
+  inventoryitems: TRSItemArray;
+  i: Int32;
+begin
+  Mouse.Speed      := 14 + Antiban.GetBehavior(EBioBehavior.MOUSE_SPEED);
+  Mouse.Gravity    := 8  + Round(Antiban.GetBehavior(EBioBehavior.MOUSE_GRAVITY) / 2);
+  Mouse.Wind       := 3  + Round(Antiban.GetBehavior(EBioBehavior.MOUSE_WIND) / 2);
+  Mouse.MissChance := 11 + Antiban.GetBehavior(EBioBehavior.MOUSE_MISS);
+  Mouse.CanIdle    := True;
+  writeln('mouse speed de 14 + antiban bio: ', Mouse.Speed);
+
+  RSClient.Image.Clear;
+
+  if (not RSClient.IsLoggedIn) then
+    Login.LoginPlayer();
+
+  if (not InRange(Options.GetZoomLevel, 3, 12)) then
+    Options.SetZoomLevel(SRL.TruncatedGauss(3,12));
+  MM2MS.ZoomLevel := Options.GetZoomLevel();
+
+  MainScreen.SetHighestPitch();
+
+  Self.RSW.SetupRegions([RSRegions.FOSSIL_ISLAND, RSRegions.CASTLE_WARS, RSRegions.FOSSIL_ISLAND_TELESCOPE], 4);
+  Self.RSW.ScreenWalk := True;
+
+  if not Self.isSetup then
+    with Self do
+    begin
+
+    {MUSH TREES}
+      MushTree.SetupEx([2, 2, 13], [[10159, 951], [10160, 947], [10156, 948],[9430, 1271], [9434, 1271], [9434, 1266], [9429, 1266]]);
+      MushTree.SetupUpText(['Use']);
+      MushTree.UpText := ['Mushtree'];
+      MushTree.Finder.Colors +=  CTS2(8167585, 24, 0.02, 0.30);
+
+      MushTree2.SetupEx([2, 2, 13], [[10159, 951], [10160, 947], [10156, 948],[9430, 1271], [9434, 1271], [9434, 1266], [9429, 1266]]);
+      MushTree2.SetupUpText(['Use']);
+      MushTree2.UpText := ['Mushtree'];
+      MushTree2.Finder.Colors +=  CTS2(2776455, 8, 0.04, 0.30);
+      MushTree2.Finder.Colors +=  CTS2(9410958, 27, 0.06, 0.10);
+
+    {HOLE}
+      Hole.SetupEx([1, 1, 1],[[9450, 1275],[9470, 1251],[9105, 767],[9113, 1036]]);
+      Hole.SetupUpText(['Build']);
+      Hole.Finder.Colors += CTS2(1191511, 8, 0.24, 4.86);
+      Hole.UpText:= ['Space'];
+      Hole.SelectOption(['Build']);
+
+    {HOUSES}
+      Houses += [House1, House2, House3, House4];
+
+      Houses[0].House.SetupEx([1, 1, 7], [[9470, 1251]]);
+      Houses[0].House.SetupUpText(['Yew']);
+      Houses[0].House.Finder.Colors := [CTS2(474965, 7, 0.42, 2.44)];
+      Houses[0].TravelMethod := EBirdhouseTravelMethod.FIRST_HOUSE;
+
+      Houses[1].House.SetupEx([1, 1, 7], [[9449, 1276]]);
+      Houses[1].House.SetupUpText(['Yew']);
+      Houses[1].House.Finder.Colors := [CTS2(474965, 7, 0.42, 2.44)];
+      Houses[1].TravelMethod := EBirdhouseTravelMethod.SECOND_HOUSE;
+
+      Houses[2].House.SetupEx([1, 1, 7], [[9105, 767]]);
+      Houses[2].House.SetupUpText(['Yew']);
+      Houses[2].House.Finder.Colors := [CTS2(474965, 7, 0.42, 2.44)];
+      Houses[2].TravelMethod := EBirdhouseTravelMethod.THIRD_HOUSE;
+
+      Houses[3].House.SetupEx([1, 1, 7], [[9112, 1036]]);
+      Houses[3].House.SetupUpText(['Yew']);
+      Houses[3].House.Finder.Colors := [CTS2(474965, 7, 0.42, 2.44)];
+      Houses[3].TravelMethod := EBirdhouseTravelMethod.FOURTH_HOUSE;
+
+      CurrentHouse := Houses[0];
+      HouseNumber := 0;
+      Self.isSetup := True;
+    end;
+
+
+  {                          INVENTORY                            }
+
+  repeat
+  begin
+    if Bank.Open(ERSBankLocation.CASTLE_WARS) then
+    begin
+      Inventory_ += TRSBankItem.Setup('Hammerstone seed', -1, False);
+      Inventory_[0].Tab := 6; Inventory_[0].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Hammer', 1, False);
+      Inventory_[1].Tab := 6; Inventory_[1].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Digsite pendant (1)', 1, False);
+      Inventory_[2].Tab := 1; Inventory_[2].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Chisel', 1, False);
+      Inventory_[3].Tab := 6; Inventory_[3].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Yew logs', 4, False);
+      Inventory_[4].Tab := 6; Inventory_[4].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Ring of dueling(1)', 1, False);
+      Inventory_[5].Tab := 1; Inventory_[5].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Graceful hood', 1, False);
+      Inventory_[6].Tab := 0; Inventory_[6].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Graceful top', 1, False);
+      Inventory_[7].Tab := 0; Inventory_[7].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Graceful legs', 1, False);
+      Inventory_[8].Tab := 0; Inventory_[8].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Graceful gloves', 1, False);
+      Inventory_[9].Tab := 0; Inventory_[9].Scroll := 0;
+
+      inventoryitems += 'Hammerstone seed';
+      inventoryitems += 'Hammer';
+      inventoryitems += 'Yew logs';
+      inventoryitems += 'Digsite pendant (1)';
+      inventoryitems += 'Chisel';
+      inventoryitems += 'Ring of dueling(1)';
+
+      //Withdraw
+      {
+      for i := 0 to High(Inventory_) do
+      begin
+        if (Inventory_[i].Quantity = 1) then
+        begin
+          Bank.WithdrawItem(Inventory_[i], True);
+        end else
+        begin
+          Bank.WithdrawItem(Inventory_[i], False);
+        end;
+        Wait(0, 72);
+      end;}
+      WithdrawItemsInRandomOrder(Inventory_);
+    end else
+    begin
+      writeln('Didnt open bank, walking there and retrying');
+      Self.RSW.webwalk([5166, 4115]);
+    end;
+  end;
+  Until Inventory.count >= 1;
+
+  while Bank.IsOpen() do
+    Bank.Close();
+
+  while not Inventory.IsOpen() do
+    Inventory.Open();
+
+  for i := 0 to High(Inventory_) do
+  begin
+    if not inventoryitems.Contains(Inventory_[i].Item) then
+    begin
+      Inventory.ClickItem(Inventory_[i].Item);
+      Wait(0, 72);
+    end;
+  end;
+
+//TRAVEL
+  wait(300, 800);
+  begin
+    TeleportToFossilIsland;
+    waitUntil(isPlayerIn(Self.RSW.GetMyPos, RSRegions.FOSSIL_ISLAND_TELESCOPE), 400, 10000);
+    writeln('Teleported');
+    wait(200, 600);
+  end;
+end;
+
+//GET STATE
+function TRunner.GetState(): ERunnerState;
+var
+  houseATPA : T2DPointArray;
+begin
+  if not RSClient.IsLoggedIn then
+    Login.LoginPlayer;
+
+  if CurrentHouse.Completed then
+    Exit;
+
+  if CurrentHouse.Fed then
+    Exit(ERunnerState.NEXT_HOUSE);
+
+  if not Self.CurrentHouse.Traveled then
+    Exit(ERunnerState.TRAVEL);
+
+  if (Self.CurrentHouse.Wasemptyed and not Self.CurrentHouse.Built) then
+    Exit(ERunnerState.BUILD);
+
+  repeat
+  begin
+    houseATPA := Mainscreen.FindObject(Self.CurrentHouse.House.Finder, Mainscreen.Bounds());
+  end;
+  until (houseATPA.len > 1);
+
+  if (houseATPA.len > 1) then
+  begin
+    if not CurrentHouse.Wasemptyed then
+      Exit(ERunnerState.EMPTY);
+
+    if not CurrentHouse.Fed then
+      Exit(ERunnerState.FEED);
+
+    Exit(ERunnerState.NEXT_HOUSE);
+  end;
+  writeln('COUDNT RESOLVE STATE, EXITING');
+end;
+
+procedure TRunner.ChainerRun();
+var
+  i : int32;
+begin
+  Runner.Init();
+  Runner.Run();
+
+  while not RSRegions.CASTLE_WARS.Contains(Self.RSW.getmypos()) do
+  begin
+    TeleportToCastleWars;
+    if not WaitUntil(RSRegions.CASTLE_WARS.Contains(Self.RSW.getmypos()),300, 3000) then
+    begin
+      writeln('Failed teleporting to Castle Wars, retrying');
+    end else
+    begin
+    writeln('Teleported to castle wars');
+    end;
+  end;
+
+  while (Inventory.Count >= 1) do
+  begin
+    writeln('inv count:');
+    writeln(Inventory.Count());
+    waitEx(250, 50);
+    Bank.WalkOpen();
+    if Bank.open() then
+    begin
+      Bank.DepositAll();
+      wait(200, 300);
+      Mouse.click([467, 299, 493, 325], 1);
+    end;
+    waitUntil(inventory.CountEmptySlots = 28, 200, 3000);
+    Bank.close();
+  end;
+
+  for i := 0 to High(Self.Houses) do
+  begin
+    Self.Houses[i].Built := False;
+    Self.Houses[i].Completed := False;
+    Self.Houses[i].Wasemptyed := False;
+    Self.Houses[i].Traveled := False;
+    Self.Houses[i].Fed := False;
+  end;
+
+  Self.RunCompleted := False;
+  Self.CurrentHouse := Self.Houses[0];
+  Self.HouseNumber  := 0;
+
+  writeln('BIRDHOUSE CHAINER RUN DONE ----------');
+  Self.RSW.Free();
+end;
+
+
+{$IFNDEF SCRIPT_CHAIN}
+begin
+  Runner.ChainerRun();
+  wait(10000);
+  Runner.ChainerRun();
+end.
+{$ENDIF}

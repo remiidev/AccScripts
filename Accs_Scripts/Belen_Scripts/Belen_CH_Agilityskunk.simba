@@ -1,0 +1,812 @@
+{$IFNDEF SCRIPT_CHAIN}
+  {$DEFINE SRL_USE_REMOTEINPUT}
+  {$I SRL-T/osr.simba}
+  {$I WaspLib/osr.simba}
+{$ENDIF}
+{$I WaspLib/osr/walker/agility.graph}
+{$include_once ../Scripts/Accs_Scripts/RemiLib.simba}
+
+type
+  TPlatform = record
+    IsSetup: Boolean;
+    Box: TBox;
+    StartCoordinate: TPoint;
+    EndCoordinate: TPoint;
+    Obstacle: TRSObject;
+    ActionText: String;
+    DurationNextObstacle: Int32;
+    Color: TCTS2Color;
+    PlatformNumber: Int32;
+  end;
+
+  EAgilityState = (
+    RUNNING_TO_START,
+    STARTING_COURSE,
+    CROSSING_OBSTACLE,
+    PICKING_UP_GRACE,
+    STUCK,
+    EAT_FOOD,
+    UNPROCESSABLE_STATE,
+    DONE
+  );
+
+  ECourse = (
+    GNOME_AGILITY,
+    VARROCK_AGILITY,
+    CANIFIS_AGILITY,
+    SEERS_AGILITY,
+    RELLEKKA_AGILITY,
+    ARDOUGNE_AGILITY
+  );
+
+  TAgility = record
+    State: EAgilityState;
+    prevState: EAgilityState;
+    Platforms: array of TPlatform;
+    CourseBoxes: TBoxArray;
+    CityBox: TBox;
+    CurrentPlatform: TPlatform;
+    PreviousPlatform: TPlatform;
+    PlatformTimer: TCountdown;
+    StartAction: String;
+    StartObstacle: TRSObject;
+    StartCoordinate: TPoint;
+    MarkOfGraceCoordinate: TPoint;
+    ShutdownTime: Int64;
+    Course: ECourse;
+    EatPercent: Int32;
+    TotalActions: Int32;
+    RSW         : TRSWalker;
+    Done : Boolean;
+    PreferredAngle: record
+      min, max: Int32;
+    end;
+  end;
+
+var
+  Agility: TAgility;
+
+const
+  SEERS_LADDER_COLOR: TCTS2Color := CTS2(798292, 8, 0.49, 3.41);
+  BLACK_COLOR: TCTS2Color := CTS2(0, 1, 0.01, 0.01);
+
+function TPlatform.Setup(box: TBox; obstacleCoord: TPoint; actionText: String; durationNextObstacle: Int32; colors: array of TCTS2Color; height: Int32; width: Int32; startPoint: TPoint; endPoint: TPoint): TPlatform;
+var
+  color: TCTS2Color;
+begin
+  Self.IsSetup := True;
+  Self.Box := box;
+  Self.ActionText := actionText;
+  Self.DurationNextObstacle := durationNextObstacle;
+  Self.Obstacle.Setup(width, height, [obstacleCoord]);
+  Self.Obstacle.Setup([actionText]);
+
+  for color in colors do
+    if color = [] then
+      Self.Obstacle.Filter.Finder := False
+    else
+      Self.Obstacle.Finder.Colors += color;
+
+  Exit(Self);
+end;
+
+function TPlatform.Setup(box: TBox; obstacleCoord: TPoint; actionText: String; durationNextObstacle: Int32; color: TCTS2Color; height: Int32; width: Int32; startPoint: TPoint; endPoint: TPoint): TPlatform; overload;
+begin
+  self.Setup(box, obstacleCoord, actionText, durationNextObstacle, [color], height, width, startPoint, endPoint);
+  Exit(Self);
+end;
+
+function SetupPlatform(box: TBox; obstacleCoord: TPoint; actionText: String; durationNextObstacle: Int32 = 1000; color: TCTS2Color = []; height: Int32 = 1; width: Int32 = 1; startPoint: TPoint = []; endPoint: TPoint = []): TPlatform;
+var
+  platform: TPlatform;
+begin
+  Exit(platform.Setup(box, obstacleCoord, actionText, durationNextObstacle, color, height, width, startPoint, endPoint));
+end;
+
+function SetupPlatform(box: TBox; obstacleCoord: TPoint; actionText: String; durationNextObstacle: Int32 = 1000; colors: array of TCTS2Color = []; height: Int32 = 1; width: Int32 = 1; startPoint: TPoint = []; endPoint: TPoint = []): TPlatform; overload;
+var
+  platform: TPlatform;
+begin
+    Exit(platform.Setup(box, obstacleCoord, actionText, durationNextObstacle, colors, height, width, startPoint, endPoint));
+end;
+
+procedure TAgility.RotateToPreferredAngle();
+var
+  minMaxAvg: Int32 := Floor((Self.PreferredAngle.Min + Self.PreferredAngle.Max) div 2);
+  preferredAngle: Int32 := SRL.SkewedRand(minMaxAvg, Self.PreferredAngle.Min, Self.PreferredAngle.Max);
+begin
+  if preferredAngle < 0 then
+    preferredAngle := preferredAngle + 360;
+
+  Minimap.SetCompassAngle(preferredAngle);
+end;
+
+function TAgility.InPreferredRange(): Boolean;
+var
+  positiveAngle: Int32;
+  currentCompassAngle: Int32;
+begin
+  currentCompassAngle := Floor(Minimap.GetCompassAngle(True));
+  if (Self.PreferredAngle.Min < 0) then
+  begin
+    positiveAngle := Self.PreferredAngle.Min + 360;
+
+    Exit(InRange(currentCompassAngle, positiveAngle, 360)
+      or InRange(currentCompassAngle, 0, Self.PreferredAngle.Max));
+  end
+  else
+    Exit(InRange(currentCompassAngle, Self.PreferredAngle.min, Self.PreferredAngle.max));
+end;
+
+function TAgility.IsStuckSeers(currentPlatform: TPlatform): Boolean;
+var
+  blackTPA: TPointArray;
+  blackClusters: T2DPointArray;
+  upstairsBox: TBox := [796, 1326, 828, 1340];
+  smallBlackClusters: T2DPointArray;
+  smallestBlackCluster: TPointArray;
+  blackPoint: TPoint;
+  lotsOfBlackPoints: Boolean;
+  playerMMBox: TBox := Box(Minimap.Center, 6, 6);
+  allBlackContained: Boolean;
+begin
+  if self.rsw.GetMyPos().InBox(upstairsBox)
+    then Exit(True);
+
+  SRL.FindColors(blackTPA, BLACK_COLOR, Minimap.Bounds());
+  lotsOfBlackPoints := blackTPA.len() >= 10000;
+
+  //temp setting
+  allBlackContained := True;
+
+  blackClusters := blackTPA.Cluster(2);
+  blackClusters := blackClusters.SortFrom(Minimap.Center);
+  blackClusters.FilterSize(2, 8);
+  if (blackClusters.Len() = 0)
+    then Exit(False);
+
+  smallestBlackCluster := blackClusters[0];
+  for blackPoint in smallestBlackCluster do
+    if not blackPoint.InBox(playerMMBox) then
+      allBlackContained := False;
+
+  if allBlackContained and lotsOfBlackPoints then
+    Exit(True);
+end;
+
+function TAgility.IsStuck(currentPlatform: TPlatform): Boolean;
+begin
+  if self.PlatformTimer.IsFinished() then
+    Exit(True);
+  if not (self.previousPlatform = currentPlatform) then
+  begin
+    previousPlatform := currentPlatform;
+    self.PlatformTimer.Restart();
+  end;
+
+  // we could try something like
+  // if we're on seers and ladder color of the ladder nearby then we are donezo? could test a few laps with it to see if it triggers
+  case self.Course of
+    ECourse.SEERS_AGILITY: Result := self.IsStuckSeers(currentPlatform);
+  end;
+end;
+
+function TAgility.GetState(): EAgilityState;
+var
+  currentPlatform: TPlatform;
+begin
+  currentPlatform := Self.GetCurrentPlatform();
+  if (Minimap.GetHPPercent() < self.EatPercent) and Inventory.ContainsConsumable(ERSConsumable.FOOD) then
+    Exit(EAgilityState.EAT_FOOD);
+  if Self.IsStuck(currentPlatform) then
+    Exit(EAgilityState.STUCK);
+  if Self.IsMarkOfGraceOnPlatform(currentPlatform) then
+    Exit(EAgilityState.PICKING_UP_GRACE);
+  if Self.OnPlatform(currentPlatform) then
+    Exit(EAgilityState.CROSSING_OBSTACLE);
+  if Self.ReadyToStart() then
+    Exit(EAgilityState.STARTING_COURSE);
+  if Self.NotOnCourse() then
+    Exit(EAgilityState.RUNNING_TO_START);
+
+  Exit(EAgilityState.UNPROCESSABLE_STATE);
+end;
+
+function TAgility.IsMarkOfGraceOnPlatform(currentPlatform: TPlatform): Boolean;
+var
+  graceATPA: T2DPointArray;
+begin
+  if RSGroundItems.MarkOfGrace.Find(graceATPA) then
+  begin
+    WriteLn 'Spotted Mark of grace';
+    if currentPlatform.Box.Contains(RSGroundItems.MarkOfGrace.ClosestDot) then
+      Exit(True);
+
+    WriteLn 'Not on our platform';
+    WriteLn RSGroundItems.MarkOfGrace.ClosestDot
+  end;
+  Exit(False);
+end;
+
+function TAgility.NotOnCourse(): Boolean;
+begin
+  Exit(Self.CityBox.Contains(Self.RSW.GetMyPos()));
+end;
+
+function TAgility.ReadyToStart(): Boolean;
+begin
+  Exit(Self.RSW.AtTile(Self.StartCoordinate, 5));
+end;
+
+function TAgility.AtStartOfPlatform(currentPlatform: TPlatform): Boolean;
+begin
+  Exit(Self.RSW.AtTile(currentPlatform.StartCoordinate, 5));
+end;
+
+function TAgility.AtEndOfPlatform(currentPlatform: TPlatform): Boolean;
+begin
+  Exit(Self.RSW.AtTile(currentPlatform.EndCoordinate, 5));
+end;
+
+function TAgility.OnPlatform(currentPlatform: TPlatform): Boolean;
+begin
+  Exit(currentPlatform.IsSetup);
+end;
+
+function TAgility.GetCurrentPlatform(): TPlatform;
+var
+  platform: TPlatform;
+  myPos: TPoint := Self.RSW.GetMyPos();
+  platformNumber: Int32;
+begin
+  for platform in Self.Platforms do
+  begin
+    if platform.Box.Contains(myPos) then
+      Exit(platform);
+  end;
+end;
+
+function TAgility.GetNextPlatform(): TPlatform;
+var
+  platform: TPlatform;
+  myPos: TPoint := Self.RSW.GetMyPos();
+  platformNumber: Int32;
+begin
+  for platform in Self.Platforms do
+  begin
+    //                                  make sure it's not the last platform (no next platform)
+    if platform.Box.Contains(myPos) and (platform.PlatformNumber < High(self.Platforms)) then
+      Exit(self.Platforms[platform.PlatformNumber + 1]);
+  end;
+end;
+
+function TAgility.GetNextPlatform(platform: TPlatform): TPlatform; constref; overload
+begin
+  // make sure it's not the last platform (no next platform)
+  if platform.PlatformNumber < High(self.Platforms) then
+    Exit(self.Platforms[platform.PlatformNumber + 1]);
+
+  raise 'passed last platform';
+end;
+
+procedure TAgility.StartCourse();
+var
+  startATPA: T2DPointArray;
+  clusterIndex: Int32;
+begin
+  if GetTimeRunning > Self.ShutdownTime then
+    Exit;
+
+  if (self.TotalActions mod Random(4, 5) = 0) then
+    self.RotateToPreferredAngle();
+
+  // cant see obstacle; walk to start
+  if not Self.StartObstacle.Find(startATPA) then
+  begin
+    Self.RSW.WebWalk(Self.StartCoordinate, 20);
+
+    if not self.InPreferredRange() then
+      self.RotateToPreferredAngle();
+  end
+  else // handle mousing start obstacle
+  begin
+    case self.Course of
+      ECourse.ARDOUGNE_AGILITY:
+      begin
+        startATPA := startATPA.Merge().Cluster(1);
+        startATPA.SortByX(True);
+        repeat
+          Mouse.Move(startATPA[clusterIndex][Floor(Length(startATPA[clusterIndex]) * 3 div 4)]);
+          clusterIndex += 1;
+        until Mainscreen.IsUpText(self.StartAction) or (clusterIndex >= High(startATPA));
+      end
+    else
+      for 1 to 3 do
+      begin
+        Mouse.Move(startATPA[0].RandomValue());
+        if Mainscreen.IsUpText(self.StartAction) then
+          break;
+      end;
+    end;
+  end;
+
+  // handle clicking start obstacle
+  if Mainscreen.IsUpText(self.StartAction) then
+  begin
+    Mouse.Click(MOUSE_LEFT);
+    if Mainscreen.DidRedClick()
+      and WaitUntil((self.GetCurrentPlatform() = self.Platforms[0]), 200, 12000) then
+    begin
+      TotalActions += 1;
+      WaitUntil(not SRL.IsAnimating(Mainscreen.GetPlayerBox(), 100, 300), 300, 3000);
+    end;
+  end
+  else // we failed to mouse the starting obstacle even though we are near it, lets rotate
+    self.RotateToPreferredAngle();
+end;
+
+procedure TAgility.RunToEndOfPlatform();
+begin
+  Self.RSW.WalkBlind(Self.GetCurrentPlatform().EndCoordinate, 3);
+end;
+
+function TAgility.HandleStuckSeers(): Boolean;
+var
+  blackTPA: TPointArray;
+  blackClusters: T2DPointArray;
+  upstairsBox: TBox := [796, 1326, 828, 1340];
+  smallBlackClusters: T2DPointArray;
+  smallestBlackCluster: TPointArray;
+  blackPoint: TPoint;
+  lotsOfBlackPoints: Boolean;
+  playerMMBox: TBox := Box(Minimap.Center, 6, 6);
+  allBlackContained: Boolean;
+  ladderMS: TPoint;
+begin
+  if self.rsw.GetMyPos().InBox(upstairsBox)
+    then Exit(True);
+
+  SRL.FindColors(blackTPA, BLACK_COLOR, Minimap.Bounds());
+  lotsOfBlackPoints := blackTPA.len() >= 10000;
+
+  allBlackContained := True;
+  blackClusters := blackTPA.Cluster(2);
+  blackClusters := blackClusters.SortFrom(Minimap.Center);
+  blackClusters.FilterSize(2, 8);
+
+  smallestBlackCluster := blackClusters[0];
+  for blackPoint in smallestBlackCluster do
+    if not blackPoint.InBox(playerMMBox) then
+      allBlackContained := False;
+
+  if not(allBlackContained and lotsOfBlackPoints) then
+    Exit(False);
+
+  // we are upstairs, find ladder on minimap and convert to mainscreen
+  for 1 to 5 do
+  begin
+    ladderMS := Minimap.PointToMs(smallestBlackCluster.Mean());
+
+    Mouse.Move(ladderMS);
+    if Mainscreen.IsUpText('mb-do') then
+    begin
+      Mouse.Click(MOUSE_LEFT);
+      if Mainscreen.DidRedClick(400) then
+      begin
+        Wait(2500, 4000);
+        Exit(True);
+      end;
+    end;
+
+    Antiban.RandomRotate(); 
+  end;
+
+  Exit(False);
+end;
+
+function TAgility.HandleStuck(): Boolean;
+var
+  handled: Boolean;
+begin
+  case self.Course of
+    ECourse.SEERS_AGILITY: handled := self.HandleStuckSeers();
+  end;
+
+  if not handled then
+  begin
+    WriteLn 'We are stuck and couldnt handle it. Send this pic to skunkworks:';
+    // Debug(self.StartObstacle);
+    self.rsw.DebugPosition();
+    Logout.ClickLogout();
+    TerminateScript();
+  end;
+end;
+
+procedure TAgility.SetupArdougne();
+begin
+  Self.CityBox := [1403, 1067, 1718, 1392];
+  Self.PreferredAngle := [15, 35];
+  Self.StartCoordinate := [1606, 1254];
+  Self.StartAction := 'Climb';
+  Self.Platforms := [
+    SetupPlatform([976, 894, 984, 942], [978, 898], 'Jump', 5000, [], 4),
+    SetupPlatform([940, 858, 960, 866], [942, 862], 'Walk-on', 7500, CTS2(4412766, 4, 0.19, 0.32)),
+    SetupPlatform([908, 858, 928, 866], [908, 864], 'Jump', 9500, [], 1),
+    SetupPlatform([904, 874, 912, 896], [908, 898], 'Jump', 4000, [], 5),
+    SetupPlatform([900, 896, 912, 936], [912, 933], 'Balance', 3800, [CTS2(2011370, 22, 0.03, 0.60), CTS2(2799084, 19, 0.03, 0.71)], 1, 2),
+    SetupPlatform([916, 942, 924, 950], [923, 947], 'Jump', 4000, [], 5)
+  ];
+
+  Self.StartObstacle.Setup(1, 5, [[1610, 1254]]);
+  Self.StartObstacle.Setup([Self.StartAction]);
+  Self.StartObstacle.Finder.Colors += CTS2(9934754, 2, 10.63, 0.77);
+end;
+
+procedure TAgility.SetupRellekka();
+begin
+  Self.CityBox := [1588, 1, 1997, 396];
+  Self.PreferredAngle := [135, 225];
+  Self.StartCoordinate := [1744, 172];
+  Self.StartAction := 'Climb';
+  Self.Platforms := [
+    SetupPlatform([1355, 689, 1373, 708], [1351, 714], 'Leap', 5000, [], 4),
+    SetupPlatform([1330, 719, 1357, 766], [1357, 767], 'Cross', 7500, CTS2(4743540, 13, 0.03, 0.07)),
+    SetupPlatform([1372, 778, 1388, 798], [1386, 772], 'Leap', 9500, [], 1),
+    SetupPlatform([1420, 782, 1444, 802], [1442, 778], 'Hurdle', 4000, [], 5),
+    SetupPlatform([1436, 746, 1468, 768], [1455, 744], 'Cross', 3800, []),
+    SetupPlatform([1484, 670, 1518, 736], [1485, 696], 'Jump', 4000, [], 5)
+  ];
+
+  Self.StartObstacle.Setup(1, 5, [[1715, 181]]);
+  Self.StartObstacle.Setup([Self.StartAction]);
+  Self.StartObstacle.Finder.Colors += CTS2(3033435, 1, 0.16, 0.94);
+end;
+
+procedure TAgility.SetupSeers();
+begin
+  Self.CityBox := [289, 994, 588, 1300];
+  Self.PreferredAngle := [-45, 45];
+  Self.StartCoordinate := [480, 1120];
+  Self.StartAction := 'p Wall';
+  Self.Platforms := [
+    SetupPlatform([797, 1107, 837, 1140], [796, 1122], 'Jump', 5000, [], 4),
+    SetupPlatform([996, 1106, 1040, 1154], [1022, 1144], 'Cross', 7500, CTS2(4349291, 5, 0.10, 0.22)),
+    SetupPlatform([1019, 1169, 1050, 1198], [1022, 1196], 'Jump', 4000, [], 6),
+    SetupPlatform([709, 1188, 785, 1224], [722, 1223], 'Jump', 4000, [], 5),
+    SetupPlatform([942, 1234, 997, 1266], [994, 1246], 'Jump', 3800, [])
+  ];
+
+  Self.StartObstacle.Setup(9, [[493, 1085]]);
+  Self.StartObstacle.Setup([Self.StartAction]);
+  Self.StartObstacle.Finder.Colors += CTS2(9870489, 2, 1.22, 0.42);
+end;
+
+procedure TAgility.SetupCanifis();
+begin
+  Self.CityBox := [0, 894, 289, 1183];
+  Self.PreferredAngle := [-45, 45];
+  Self.StartCoordinate := [197, 1036];
+  Self.StartAction := 'Climb';
+  Self.Platforms := [
+    SetupPlatform([740, 884, 772, 930], [750, 888], 'Jump', 5000, [], 7),
+    SetupPlatform([704, 849, 743, 868], [713, 861], 'Jump', 5500, [], 5),
+    SetupPlatform([660, 857, 700, 889], [665, 883], 'Jump', 4000, []),
+    SetupPlatform([1194, 1178, 1223, 1218], [1213, 1214], 'Jump', 4000, []),
+    SetupPlatform([631, 929, 664, 957], [646, 946], 'Pole-vault', 7500, CTS2(3037806, 6, 0.08, 0.32)),
+    SetupPlatform([1230, 1262, 1318, 1310], [1317, 1275], 'Jump', 7200, []),
+    SetupPlatform([755, 944, 791, 985], [766, 947], 'Jump', 4500, [])
+  ];
+
+  Self.StartObstacle.Setup(7, [[201, 1031]]);
+  Self.StartObstacle.Setup([Self.StartAction]);
+  Self.StartObstacle.Finder.Colors += CTS2(4283478, 12, 0.07, 0.13);
+end;
+
+procedure TAgility.SetupVarrock();
+begin
+  Self.StartCoordinate := [208, 712];
+  Self.PreferredAngle := [45, 135];
+  Self.CityBox := [0, 574, 360, 893];
+  Self.StartAction := 'Climb';
+  Self.Platforms := [
+    SetupPlatform([559, 662, 595, 703], [567, 684], 'Cross', 6500, []),
+    SetupPlatform([516, 660, 549, 690], [515, 675], 'Leap', 5500, []),
+    SetupPlatform([844, 676, 867, 681], [842, 679], 'Balance', 10000, []),
+    SetupPlatform([481, 713, 509, 733], [484, 736], 'Leap', 3000, []),
+    SetupPlatform([446, 724, 549, 780], [550, 737], 'Leap', 7500, []),
+    SetupPlatform([585, 727, 645, 771], [647, 730], 'Leap', 5500, []),
+    SetupPlatform([655, 704, 677, 731], [658, 704], 'Hurdle', 4500, []),
+    SetupPlatform([657, 675, 677, 702], [660, 675], 'Jump-off', 4000, [])
+  ];
+
+  Self.StartObstacle.Setup(7, [[208, 712]]);
+  Self.StartObstacle.Setup([Self.StartAction]);
+  Self.StartObstacle.Finder.Colors += CTS2(2638161, 10, 0.08, 0.33);
+end;
+
+procedure TAgility.SetupGnome();
+begin
+  Self.StartCoordinate := [106, 104];
+  Self.PreferredAngle := [-45, 45];
+  Self.CityBox := [82, 81, 175, 192];
+  Self.StartAction := 'Walk-across';
+  Self.Platforms := [
+    SetupPlatform([82, 78, 173, 104], [106, 104], 'Walk-across', 12000, []),
+    SetupPlatform([89, 125, 124, 149], [106, 144], 'Climb-over', 6500, CTS2(1654104, 21, 0.06, 2.20)),
+    SetupPlatform([338, 184, 358, 192], [348, 192], 'Climb', 5500, []),
+    SetupPlatform([332, 75, 364, 103], [362, 88], 'Walk-on', 7000, CTS2(6391459, 5, 0.06, 0.62)),
+    SetupPlatform([384, 74, 419, 107], [396, 92], 'Climb-down', 3000, []),
+    SetupPlatform([130, 140, 166, 176], [150, 140], 'Climb-over', 7500, []),
+    SetupPlatform([130, 116, 170, 140], [146, 120], 'Squeeze-through', 9500, CTS2(5527130, 13, 0.56, 0.13))
+  ];
+
+  Self.StartObstacle.Setup(0, [[106, 104]]);
+  Self.StartObstacle.Setup([Self.StartAction]);
+  Self.StartObstacle.Finder.Colors += CTS2(1067632, 1, 0.17, 0.94);
+end;
+
+procedure TAgility.Setup(location: ECourse);
+var
+  platformNumber: Int32;
+begin
+  self.course := location;
+  Self.RSW.Setup('agility');
+  Self.RSW.WebGraph := WaspAgility;
+  ItemFinder.Similarity := 0.9999;
+  case location of
+    ECourse.GNOME_AGILITY: Self.SetupGnome();
+    ECourse.VARROCK_AGILITY: Self.SetupVarrock();
+    ECourse.CANIFIS_AGILITY: Self.SetupCanifis();
+    ECourse.SEERS_AGILITY: Self.SetupSeers();
+    ECourse.RELLEKKA_AGILITY: Self.SetupRellekka();
+    ECourse.ARDOUGNE_AGILITY: Self.SetupArdougne();
+  else
+    raise 'Location provided not registered in cases';
+  end;
+
+  // add platformNumbers to platforms
+  for platformNumber := 0 to High(self.Platforms) do
+    self.Platforms[platformNumber].PlatformNumber := platformNumber;
+end;
+
+procedure TAntiban.RandomPOVTask(); override;
+begin
+  Self.AdjustZoom();
+end;
+
+procedure TAgility.SetupAntiban();
+begin
+  Antiban.Skills := [ERSSkill.AGILITY];
+  Antiban.MinZoom := 15;
+  Antiban.MaxZoom := 25;
+
+  Antiban.AddTask(ONE_SECOND*90, @Mouse.RandomMovement);
+  Antiban.AddTask(ONE_MINUTE*6,  @Antiban.Swivel);
+  Antiban.AddTask(ONE_MINUTE*6,  @Antiban.RandomPOVTask);
+  Antiban.AddTask(ONE_MINUTE*7,  @Antiban.HoverMSPlayers);
+  Antiban.AddTask(ONE_MINUTE*8,  @Antiban.DoMidLoseFocus);
+  Antiban.AddTask(ONE_MINUTE*28, @Antiban.DoMidLoseFocus);
+  Antiban.AddTask(ONE_MINUTE*25, @Antiban.HoverSkills);
+  Antiban.AddBreak(ONE_MINUTE*30, ONE_SECOND*90, 0.4, 0.0);
+  Antiban.AddBreak(ONE_MINUTE*50, ONE_MINUTE*4, 0.4, 0.0);
+  Antiban.AddBreak(ONE_MINUTE*30, ONE_MINUTE*2, 0.4, 0.0);
+end;
+
+
+procedure TAgility.Run();
+var
+  platform: TPlatform;
+  graceATPA: T2DPointArray;
+  nextPlatform: TPlatform;
+  nextObstacle: TRSObject;
+  nextObstacleCoordinate: TPoint;
+begin
+  repeat
+    if GetTimeRunning > Self.ShutdownTime then
+      if Self.CityBox.Contains(Self.RSW.GetMyPos()) then
+      begin
+        writeln('Writing done through time and citybox');
+        Self.done:= True;
+        Exit;
+      end;
+
+    if GetTimeRunning > Self.ShutdownTime then
+      writeln('Time is up, but not in city yet.');
+
+    try
+      Self.State := Self.GetState();
+      if State <> prevState then
+        Writeln('Doing: ', State);
+      prevState := State;
+      RSGroundItems.MarkOfGrace.Find(graceATPA);
+      case State of
+        //EAgilityState.DONE: Break;
+        EAgilityState.RUNNING_TO_START, EAgilityState.STARTING_COURSE: self.StartCourse();
+        EAgilityState.CROSSING_OBSTACLE:
+        begin
+          platform := Self.GetCurrentPlatform();
+          //Debug(platform.Obstacle);
+          platform.Obstacle.WalkClick(true, 1);
+          //nextPlatform := self.GetNextPlatform(platform)
+          //nextObstacle := nextPlatform.Obstacle;
+          //nextObstacleCoordinate := nextObstacle.Coordinates[0];
+          //Mouse.Move(self.rsw.GetTileMSEx(nextPlatform.StartCoordinate, nextObstacleCoordinate));
+          if Mainscreen.DidRedClick()
+          and WaitUntil(not (self.GetCurrentPlatform() = platform), 200, 12000) then
+          begin
+            WaitUntil(not SRL.IsAnimating(Mainscreen.GetPlayerBox(), 100, 300), 300, 3000);
+          end;
+        end;
+        EAgilityState.PICKING_UP_GRACE:
+        begin
+          WriteLn 'Picking it up!';
+          RSGroundItems.MarkOfGrace.Click(true, 1);
+          Wait(2000, 2500);
+        end;
+        EAgilityState.STUCK: self.HandleStuck();
+        EAgilityState.EAT_FOOD:
+        begin
+          Inventory.Consume(ERSConsumable.FOOD);
+        end;
+        EAgilityState.UNPROCESSABLE_STATE:
+        begin
+          WriteLn('this really is unprocessable: ', self.rsw.GetMyPos());
+        end;
+      end;
+
+      if SRL.Dice(4) then
+      begin
+        self.PlatformTimer.Pause();
+        Antiban.DoAntiban(True, False);
+        self.PlatformTimer.Resume();
+      end;
+    except
+      WriteLn GetExceptionMessage();
+      Wait (5000);
+    end;
+  until(Done);
+end;
+
+procedure TAgility.Init(maxTime: UInt64);
+var
+  mypos_ : Tpoint;
+  Inventory_ : TRSBankItemArray;
+  inventoryitems: TRSItemArray;
+  i: Int32;
+  Canifis : TBox := [8839,2231,9647, 2785];
+begin
+  Self.RSW.SetupRegions([RSRegions.CASTLE_WARS, Canifis]);
+  Self.SetupAntiban();
+//INVENTORY
+  //SETUP BANK/INVENTORY + ADD REGIONS
+  begin
+    if Bank.Open(ERSBankLocation.CASTLE_WARS) then
+    begin
+      Inventory_ += TRSBankItem.Setup('Salve graveyard teleport', 1, False);
+      Inventory_[0].Tab := 5; Inventory_[0].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Ring of dueling(1)', 1, False);
+      Inventory_[1].Tab := 5; Inventory_[1].Scroll := 0;
+
+      inventoryitems += 'Salve graveyard teleport';
+      inventoryitems += 'Ring of dueling(1)';
+
+      for i := 0 to High(Inventory_) do
+      begin
+        Bank.WithdrawItem(Inventory_[i], False);
+        Wait(0, 72);
+      end;
+
+    end;
+  end;
+
+  while Bank.IsOpen() do
+    Bank.Close();
+
+  while not Inventory.IsOpen() do
+    Inventory.Open();
+
+  for i := 0 to High(Inventory_) do
+  begin
+    if not inventoryitems.Contains(Inventory_[i].Item) then
+    begin
+      Inventory.ClickItem(Inventory_[i].Item);
+      Wait(0, 72);
+    end;
+  end;
+  wait(200, 560);
+
+  //TRAVEL
+  if Inventory.ClickItem('Salve graveyard teleport', 'Break') then
+  begin
+    waitUntil(isPlayerIn(Self.rsw.GetMyPos, Canifis), 400, 10000);
+    Self.RSW.AdaptiveWalk := True;
+    writeln('Teleported');
+  end;
+
+  if (not InRange(Options.GetZoomLevel, 15, 22)) then
+    Options.SetZoomLevel(SRL.TruncatedGauss(15,22));
+  MM2MS.ZoomLevel := Options.GetZoomLevel();
+
+  for 1 to 5 do
+  begin
+    if Self.rsw.WebWalk([9385, 2499], 8) then
+    begin
+      writeln('Walked to the agility course');
+      wait(1000, 2200);
+      Break;
+    end else
+    begin
+      writeln('Walker failed, retrying');
+    end;
+  end;
+
+  Self.RSW.AdaptiveWalk := False;
+  Self.RSW.free();
+  Self.Done := False;
+  RSGroundItems.Setup();
+  Mouse.Speed := SRL.NormalRange(12, 21);
+  Mouse.MissChance := 1;
+  Self.EatPercent := 90;
+  Self.PlatformTimer.Init(120000); // 2 minute stuck timer
+  Self.Setup(ECourse.CANIFIS_AGILITY);
+  Antiban.MaxZoom := 15;
+  Antiban.MinZoom := 25;
+
+  Self.ShutdownTime:= GetTimeRunning + maxTime;
+end;
+
+procedure TAgility.ChainerRun(maxTime: Uint32);
+var
+  Canifis : TBox := [8839,2231,9647, 2785];
+begin
+  writeln('STARTING AGILITY CHAINER RUN');
+  Agility.Init(maxtime);
+  Agility.Run();
+
+  Self.rsw.WebGraph := WaspWeb;
+  Self.rsw.Setup('world', [RSRegions.CASTLE_WARS, Canifis]);
+  wait(500, 800);
+  writeln('Pos: ',Self.rsw.GetMyPos);
+  writeln(self.rsw.Map);
+  writeln(self.rsw.Regions);
+  writeln('Pos: ',Self.rsw.GetMyPos);
+  while not RSRegions.CASTLE_WARS.Contains(Self.RSW.getmypos()) do
+  begin
+    TeleportToCastleWars;
+    if not WaitUntil(RSRegions.CASTLE_WARS.Contains(Self.RSW.getmypos()),300, 3000) then
+    begin
+      writeln('Failed teleporting to Castle Wars, retrying');
+    end else
+    begin
+    writeln('Teleported to castle wars');
+    end;
+  end;
+
+  while (Inventory.Count >= 1) do
+  begin
+    writeln('inv count:');
+    writeln(Inventory.Count());
+    WaitUntil(RSRegions.CASTLE_WARS.Contains(Self.RSW.getmypos()), 200, 2000);
+    waitEx(250, 50);
+    Bank.WalkOpen();
+    if Bank.open() then
+    begin
+      Bank.DepositAll();
+      wait(200, 300);
+      Mouse.click([467, 299, 493, 325], 1);
+    end;
+
+    Bank.close();
+  end;
+  //Agility.RSW.Free();
+
+  Antiban.Tasks := [];
+  Antiban.Breaks := [];
+  writeln('AGILITY CHAINER RUN DONE ----------');
+end;
+
+{$IFNDEF SCRIPT_CHAIN}
+begin
+  Agility.ChainerRun(40000);
+end.
+{$ENDIF}

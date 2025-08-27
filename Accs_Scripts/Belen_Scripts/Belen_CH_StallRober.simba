@@ -1,0 +1,343 @@
+{$IFNDEF SCRIPT_CHAIN}
+  {$DEFINE SRL_USE_REMOTEINPUT}
+  {$I SRL-T/osr.simba}
+  {$I WaspLib/osr.simba}
+{$ENDIF}
+{$include_once ../Scripts/Accs_Scripts/RemiLib.simba}
+
+type
+  ERSStall = (TEA_STALL, SILK_STALL, FRUIT_STALL);
+var
+  CurrentStall: ERSStall;
+
+type
+  EStallRobberState = (
+    FIND_STALL,
+    LEVELED_UP,
+    ROB_STALL,
+    DROP_LOOT,
+    WALK_SPOT,
+    WAIT_STATE,
+    END_SCRIPT
+  );
+
+  TStallRobber = record
+    State: EStallRobberState;
+
+    Stall: TRSObject;
+    Door : TRSObject;
+    SafeSpot: TPoint;
+    DropList: TRSItemArray;
+    StallCooldown: TCountDown;
+
+    ShutdownTime: Int64;
+    Actions : Int32;
+    RSW : TRSWalker;
+  end;
+
+procedure TStallRobber.SetupAntiban();
+begin
+  Antiban.Skills := [ERSSkill.THIEVING, ERSSkill.TOTAL];
+  Antiban.MinZoom := 5;
+  Antiban.MaxZoom := 30;
+
+  Antiban.AddTask(ONE_SECOND*45, @Mouse.RandomMovement);
+  Antiban.AddTask(ONE_MINUTE*5,  @Antiban.RandomRotate);
+  Antiban.AddTask(ONE_MINUTE*6,  @Antiban.Swivel);
+  Antiban.AddTask(ONE_MINUTE*12,  @Antiban.HoverMSItems);
+  Antiban.AddTask(ONE_MINUTE*8,  @Antiban.HoverMSNPCs);
+
+  Antiban.AddTask(ONE_MINUTE*13,  @Antiban.DoMidLoseFocus);
+  Antiban.AddTask(ONE_MINUTE*25,  @Antiban.DoLongLoseFocus);
+  Antiban.AddTask(ONE_MINUTE*7,  @Antiban.DoShortLoseFocus);
+
+  Antiban.AddTask(ONE_MINUTE*25, @Antiban.HoverSkills);
+
+  Antiban.AddBreak(ONE_MINUTE*30, ONE_SECOND*90, 0.4, 0.0);
+  Antiban.AddBreak(ONE_MINUTE*50, ONE_MINUTE*4, 0.4, 0.0);
+  Antiban.AddBreak(ONE_MINUTE*30, ONE_MINUTE*2, 0.4, 0.0);
+end;
+
+procedure TStallRobber.SetupStall();
+begin
+  CurrentStall := ERSStall.FRUIT_STALL;
+  case CurrentStall of
+    ERSStall.TEA_STALL:
+      begin
+        //Self.RSW.SetupRegions([RSRegions.VARROCK_EAST]);
+        Stall := RSObjects.TeaStall;
+        StallCooldown.Init(7000);
+        SafeSpot := [8465, 2808];
+        DropList := ['Cup of tea'];
+      end;
+
+    ERSStall.SILK_STALL:
+      begin
+        //Self.RSW.SetupRegions([RSRegions.ARDOUGNE]);
+        Stall := RSObjects.SilkStall;
+        StallCooldown.Init(5000);
+        SafeSpot := [6042, 3182];
+        DropList := ['Silk'];
+      end;
+
+    ERSStall.FRUIT_STALL:
+      begin
+        //Self.RSW.SetupRegions([RSRegions.HOSIDIUS_FRUIT_STALL_HOUSE]);
+        Stall := RSObjects.FruitStall;
+        StallCooldown.Init(2000);
+        Self.DropList := [
+          'Cooking apple', 'Banana', 'Jangerberries', 'Lemon', 'Redberries',
+          'Pineapple', 'Lime', 'Strawberry', 'Strange fruit',
+          'Papaya fruit', 'Silk', 'Golovanova fruit top'
+        ];
+      end;
+  end;
+
+  StallCooldown.Timeout := GetTickCount();
+end;
+
+procedure TStallRobber.Init(maxTime: UInt64);
+var
+  pos : Tpoint;
+  Inventory_ : TRSBankItemArray;
+  inventoryitems: TRSItemArray;
+  i, j, randworld, world: Int32;
+  tpa : TPointArray;
+  lookup_box :tbox := [626,58,655,71];
+  dot_color : TCTS2Color := CTS2(14277081, 8, 0.01, 0.01);
+  WorldList : TIntegerArray;
+begin
+  Mouse.Speed      := 14 + Antiban.GetBehavior(EBioBehavior.MOUSE_SPEED);
+  Mouse.Gravity    := 8  + Round(Antiban.GetBehavior(EBioBehavior.MOUSE_GRAVITY) / 2);
+  Mouse.Wind       := 3  + Round(Antiban.GetBehavior(EBioBehavior.MOUSE_WIND) / 2);
+  Mouse.MissChance := 11 + Antiban.GetBehavior(EBioBehavior.MOUSE_MISS);
+  Mouse.CanIdle    := True;
+
+  Self.SetupAntiban;
+
+  if (not RSClient.IsLoggedIn) then
+  if Login.GetPlayer.Password <> '' then
+    Login.LoginPlayer
+  else
+  begin
+    writeln('No player credentials');
+    Exit;
+  end;
+
+  if (not InRange(Options.GetZoomLevel, 20, 30)) then
+    Options.SetZoomLevel(SRL.TruncatedGauss(20,30));
+  MM2MS.ZoomLevel := Options.GetZoomLevel();
+
+  Self.RSW.SetupRegions([RSRegions.CASTLE_WARS,[1600,1404,2963,2438]]);
+  Self.Door.Setup(9, [[2584, 2036]]);
+  Self.Door.SetupUpText(['Open', 'Close']);
+  Self.Door.Finder.Colors := [CTS2(4868686, 9, 0.01, 0.12)];
+  Self.Door.Finder.grow := 3;
+  Self.SetupStall();
+
+  rsw.AdaptiveWalk := True;
+
+  begin
+    if Bank.Open(ERSBankLocation.CASTLE_WARS) then
+    begin
+      Inventory_ += TRSBankItem.Setup('Kourend castle teleport', 1, False);
+      Inventory_[0].Tab := 3; Inventory_[0].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Ring of dueling(1)', 1, False);
+      Inventory_[1].Tab := 3; Inventory_[1].Scroll := 0;
+
+      inventoryitems += 'Kourend castle teleport';
+
+      for i := 0 to High(Inventory_) do
+      begin
+        Bank.WithdrawItem(Inventory_[i], False);
+        Wait(0, 72);
+      end;
+    end;
+  end;
+
+  while Bank.IsOpen() do
+    Bank.Close();
+
+  while not Inventory.IsOpen() do
+    Inventory.Open();
+
+  While RSRegions.CASTLE_WARS.Contains(rsw.GetMyPos) do
+  begin
+    Inventory.ClickItem("Kourend castle teleport", "Break");
+    WaitUntil(not RSRegions.CASTLE_WARS.Contains(rsw.GetMyPos), 500, 12000);
+  end;
+
+  for 1 to 10 do
+  begin
+    if Self.RSW.WebWalk([2584, 2048], 4000, 0) then
+    begin
+      minimap.WaitPlayerMoving();
+      wait(90, 220);
+      break;
+    end else
+    begin
+      writeln(Self.RSW.GetMyPos);
+    end;
+  end;
+  While minimap.IsPlayerMoving do
+  begin
+    wait(80, 120);
+  end;
+
+  {-- REVISAR SI HAY PLAYERS --}
+  HopOnMaxPlayers(1, RSWorldLists.GENERAL);
+
+  writeln('No hay players en la casa, entrando');
+  for 1 to 5 do
+  begin
+    if Self.Door.Hover(1, False) then
+    begin
+      if MainScreen.IsUpText('Open') then
+      begin
+        door.Click(True, 2);
+        wait(1000, 1300);
+        Minimap.WaitPlayerMoving();
+        wait(600, 800);
+        stall.WalkClick();
+
+      end else
+      begin
+      stall.WalkClick();
+      end;
+    end;
+  end;
+
+  WaitUntil(not minimap.IsPlayerMoving, 200, 5000);
+  wait(600, 1200);
+
+  Self.ShutdownTime:= GetTimeRunning + maxTime;
+end;
+
+function TStallRobber.HasLoot(): Boolean;
+var
+  Slots: TIntegerArray;
+begin
+  Result := Inventory.FindItems(DropList, Slots);
+end;
+
+function TStallRobber.RobStall(): Boolean;
+begin
+  if Stall.WalkClick() then
+  begin
+    Result := XPBar.WaitXP(2000);
+  end;
+
+  if Result then
+  begin
+    StallCooldown.Restart(-200, 200);
+    WL.Activity.Restart();
+  end;
+end;
+
+function TStallRobber.DropItems(): Boolean;
+var
+  Slots: TIntegerArray;
+begin
+  Inventory.FindItems(Self.DropList, Slots);
+  Result := Inventory.ShiftDrop(Self.DropList, DROP_PATTERN_SNAKE);
+
+  if Result then
+    Actions += Length(Slots);
+end;
+
+
+function TStallRobber.GetState(): EStallRobberState;
+begin
+  if GetTimeRunning > Self.ShutdownTime then
+    Exit(EStallRobberState.END_SCRIPT);
+
+  if Chat.LeveledUp() then
+    Exit(EStallRobberState.LEVELED_UP);
+
+  if Inventory.IsFull() and Self.HasLoot() then
+    Exit(EStallRobberState.DROP_LOOT);
+
+  if MainScreen.IsUpText('Steal-from') then
+    Exit(EStallRobberState.ROB_STALL);
+
+  if not StallCooldown.IsFinished() then
+    Exit(EStallRobberState.WAIT_STATE);
+
+  if (SafeSpot <> []) and not Self.RSW.AtTile(SafeSpot, 5) then
+    Exit(EStallRobberState.WALK_SPOT);
+
+  if Self.RSW.AtTile(Stall.Coordinates) then
+    Exit(EStallRobberState.FIND_STALL);
+end;
+
+procedure TStallRobber.Run();
+var
+ prevState: EStallRobberState;
+begin
+  repeat
+    Self.State := Self.GetState();
+    if State <> prevState then
+      Writeln('Doing: ', State);
+    prevState := State;
+    case Self.State of
+
+      EStallRobberState.LEVELED_UP: Chat.HandleLevelUp();
+      EStallRobberState.DROP_LOOT:  Self.DropItems();
+      EStallRobberState.FIND_STALL, EStallRobberState.ROB_STALL: Self.RobStall();
+      EStallRobberState.WAIT_STATE: Wait(100, 200);
+      EStallRobberState.WALK_SPOT:  Self.RSW.WebWalk(SafeSpot, 3, 0.2);
+    end;
+
+    Antiban.DoAntiban();
+  until(GetTimeRunning > Self.ShutdownTime);
+end;
+
+procedure TStallRobber.ChainerRun(maxTime: Uint32);
+begin
+  writeln('STARTING STALL ROBBER CHAINER RUN');
+  Self.Init(maxTime);
+  Self.Run();
+
+  while not RSRegions.CASTLE_WARS.Contains(Self.RSW.getmypos()) do
+  begin
+    TeleportToCastleWars;
+    if not WaitUntil(RSRegions.CASTLE_WARS.Contains(Self.RSW.getmypos()),300, 3000) then
+    begin
+      writeln('Failed teleporting to Castle Wars, retrying');
+    end else
+    begin
+    writeln('Teleported to castle wars');
+    end;
+  end;
+
+  while (Inventory.Count >= 1) do
+  begin
+    writeln('inv count:');
+    writeln(Inventory.Count());
+    WaitUntil(RSRegions.CASTLE_WARS.Contains(Self.RSW.getmypos()), 200, 2000);
+    waitEx(250, 50);
+    Bank.WalkOpen();
+    if Bank.open() then
+    begin
+      Bank.DepositAll();
+      wait(200, 300);
+      Mouse.click([467, 299, 493, 325], 1);
+    end;
+
+    Bank.close();
+  end;
+
+  Self.RSW.Free();
+  Antiban.Tasks := [];
+  Antiban.Breaks := [];
+  writeln('ARDY KNIGHT CHAINER RUN DONE ----------');
+end;
+
+var
+  StallRobber: TStallRobber;
+
+{$IFNDEF SCRIPT_CHAIN}
+begin
+  StallRobber.ChainerRun(53453000);
+end.
+{$ENDIF}

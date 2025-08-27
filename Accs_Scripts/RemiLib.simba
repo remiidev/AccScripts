@@ -1,0 +1,753 @@
+{$DEFINE SRL_USE_REMOTEINPUT}
+{$include_once SRL-T/osr.simba}
+{$include_once WaspLib/osr.simba}
+
+type
+ TRSWorldLists = record
+    GENERAL:                    TIntegerArray;
+    GOTR:                       TIntegerArray;
+    THIEVING_ARDY:              TIntegerArray;
+end;
+
+var
+  RSWorldLists: TRSWorldLists;
+
+begin
+  RSWorldLists.GENERAL := [321, 322,323,324,329,331,332,338,339,340,346,347,348,354,355,356,357,362,369,370,374,377,378,386,421,422,441,443,444,477,478,480,481,482, 484, 485, 486,487,488,489,490,491,492,493];
+  RSWorldLists.THIEVING_ARDY := [443, 511, 323];
+  RSWorldLists.GOTR := [445,441,478,490,492];
+end;
+
+procedure spamClick();
+var
+  i : Int32;
+  g : Int32;
+begin
+  //i := Antiban.GetUniqueInt(3, 1, 4);
+  g := SRL.NormalRange(1, 4);
+
+  writeln('Clickeando ', i, ' veces');
+  for i := 1 to g do
+  begin
+    Mouse.click(1);
+    wait(120,220);
+    writeln('clicked');
+  end;
+end;
+
+//Funcion que haga teleport on number of players seen
+          {
+procedure TeleportOnPlayers(Players : Int32; Worlds : TIntegerArray);
+var
+  tpa : TPointArray;
+  lookup_box :
+  dot_color : TCTS2Color := CTS2(14277081, 8, 0.01, 0.01);
+begin
+  SRL.FindColors(tpa,dot_color, lookup_box);
+     }
+
+procedure EnableMagicFilters();
+begin
+  Mouse.Click(GameTabs.GetTabBox(ERSGameTab.MAGIC), MOUSE_RIGHT, False, EMouseDistribution.MOUSE_DISTRIBUTION_ROWP);
+  if ChooseOption.HasOption('Enable') then
+  begin
+    writeln('Filters off, enabling');
+    ChooseOption.Select('Enable');
+  end else
+  begin
+    writeln('Filters are on');
+  end;
+end;
+
+procedure TRSMainScreen.SetLowestPitch();
+var
+  i: Int32;
+begin
+  Keyboard.KeyDown(VK_DOWN);
+
+  try
+    for i := 1 to 10 do // 2500ms timeout
+      if (SRL.GetPixelShift(Self.Bounds(), 250) / Self.Bounds.Area() * 100) < 10 then // less than 10% of the screen changed in 250ms
+        Break;
+  finally
+    Keyboard.KeyUp(VK_DOWN);
+  end;
+end;
+
+procedure TRSMainScreen.GetBankClose();
+var
+  T : TCountdown;
+  ATPA: T2DPointArray;
+  p: TPoint;
+begin
+  ATPA := bank._FindCastleWars;
+  if ATPA then
+  begin
+    atpa.SortFrom([520,262]);
+    p := atpa[0].NearestPoint([520,262]);
+  end else
+  begin
+    p := [1,1];
+  end;
+
+  while (p.DistanceTo([520,262]) > 80) or (atpa[0].Len() < 300) do
+  begin
+    T.Init(300);
+    while not T.IsFinished do
+    begin
+      Keyboard.KeyDown(VK_RIGHT);
+    end;
+    Keyboard.KeyUp(VK_RIGHT);
+    ATPA := bank._FindCastleWars;
+    if ATPA then
+    begin
+      ATPA.SortFrom([520,262]);
+      p := atpa[0].NearestPoint([520,262]);
+      writeln(p.DistanceTo([520,262]));
+    end;
+  end;
+  //writeln('Size: ', atpa[0].Len());
+  //Debug(atpa[0]);
+end;
+function isPlayerIn(pos : TPoint; Location : Tbox): Boolean;
+begin
+  Result :=Location.Contains(pos);
+end;
+
+procedure DisableMagicFilters();
+begin
+  Mouse.Click(GameTabs.GetTabBox(ERSGameTab.MAGIC), MOUSE_RIGHT, False, EMouseDistribution.MOUSE_DISTRIBUTION_ROWP);
+  if ChooseOption.HasOption('Disable') then
+  begin
+    writeln('Filters on, disabling');
+    ChooseOption.Select('Disable');
+  end else
+  begin
+    writeln('Filters are off');
+  end;
+end;
+
+procedure spamClick(Times : Int32); overload;
+var
+  i : Int32;
+begin
+  writeln('Clickeando ', Times, ' veces');
+  for i := 1 to Times do
+  begin
+    Mouse.click(1);
+    wait(120,220);
+    writeln('clicked');
+  end;
+end;
+
+//By Skunkworks
+procedure HandleTeleportToFishingGuild();
+var
+  textColor: TColor := 337970;
+  textColorTPA: TPointArray;
+  clusteredText: T2DPointArray;
+  foundTextBox: TBox;
+  textBox: TBox;
+  findInterfaceAttempts: Int32;
+begin
+  repeat
+    SRL.FindColors(textColorTPA, textColor, MainScreen.Bounds());
+    clusteredText := textColorTPA.Cluster(6, 1);
+    if not (clusteredText.Len() > 8) then
+      Wait(SRL.TruncatedGauss(400, 600));
+
+    findInterfaceAttempts += 1;
+    // there are like 12 clusters, so just check if there are more than 8 for false positives
+  until (clusteredText.Len() > 8) or (findInterfaceAttempts > 4);
+  for textBox in clusteredText.ToTBA() do
+  begin
+    textBox := textBox.Expand(5);
+    OCR.LocateText(textBox, 'Fishing Guild', RS_FONT_PLAIN_12, TOCRColorFilter.Create([textColor]), foundTextBox);
+    if foundTextBox.Area > 1 then
+    begin
+      Mouse.Move(foundTextBox.Center());
+      writeln(MainScreen.GetUpText());
+      Mouse.Click(MOUSE_LEFT);
+      Exit;
+    end;
+  end;
+end;
+
+procedure HandleTeleportToWCGuild();
+var
+  textColor: TColor := 337970;
+  textColorTPA: TPointArray;
+  clusteredText: T2DPointArray;
+  foundTextBox: TBox;
+  textBox: TBox;
+  findInterfaceAttempts: Int32;
+begin
+  repeat
+    SRL.FindColors(textColorTPA, textColor, MainScreen.Bounds());
+    clusteredText := textColorTPA.Cluster(6, 1);
+    if not (clusteredText.Len() > 8) then
+      Wait(SRL.TruncatedGauss(400, 600));
+
+    findInterfaceAttempts += 1;
+    // there are like 12 clusters, so just check if there are more than 8 for false positives
+  until (clusteredText.Len() > 8) or (findInterfaceAttempts > 4);
+  for textBox in clusteredText.ToTBA() do
+  begin
+    textBox := textBox.Expand(5);
+    OCR.LocateText(textBox, 'Woodcutting Guild', RS_FONT_PLAIN_12, TOCRColorFilter.Create([textColor]), foundTextBox);
+    if foundTextBox.Area > 1 then
+    begin
+      Mouse.Move(foundTextBox.Center());
+      writeln(MainScreen.GetUpText());
+      Mouse.Click(MOUSE_LEFT);
+      Exit;
+    end;
+  end;
+end;
+
+//CASTLE WARS TP
+procedure TeleportToCastleWars();
+
+begin
+  if Inventory.ContainsItem('Ring of dueling(1)') then
+  begin
+    if Inventory.ClickItem('Ring of dueling(1)', 'Rub') then
+    begin
+      WaitUntil(Chat.FindOption('Castle Wars Arena', [0]), 200, 5000);
+      Chat.ClickOption('Castle Wars Arena', False, [CHAT_COLOR_BLACK]);
+      wait(5000);
+    end;
+  end else
+  if Equipment.ContainsItem('Ring of dueling(1)') then
+  begin
+    Equipment.ClickItem('Ring of dueling(1)', 'Castle Wars');
+    wait(5000);
+  end
+  else
+    writeln('Didnt find Dueling Ring in inventory or equipment.');
+end;
+
+//FISHING GUILD TP
+procedure TeleportToFishingGuild();
+
+begin
+  if Inventory.ContainsItem('Skills necklace(1)') then
+  begin
+    if Inventory.ClickItem('Skills necklace(1)', 'Rub') then
+    begin
+      HandleTeleportToFishingGuild;
+      writeln('Teleported, waiting now.');
+      wait(300);
+    end;
+  end else
+  if Equipment.ContainsItem('Skills necklace(1)') then
+  begin
+    Equipment.ClickItem('Skills necklace(1)', 'Fishing Guild');
+    writeln('Teleported, waiting now.');
+    wait(300);
+  end
+  else
+    writeln('Didnt find Skills necklace in inventory or equipment.');
+end;
+
+//DRAYNOR VILLAGE TP
+procedure TeleportToDraynorVillage();
+
+begin
+  if Inventory.ContainsItem('Amulet of glory(1)') then
+  begin
+    if Inventory.ClickItem('Amulet of glory(1)', 'Rub') then
+    begin
+      WaitUntil(Chat.FindOption('Draynor Village', [0]), 200, 5000);
+      Chat.ClickOption('Draynor Village', False, [CHAT_COLOR_BLACK]);
+      wait(300);
+    end;
+  end else
+  if Equipment.ContainsItem('Amulet of glory(1)') then
+  begin
+    Equipment.ClickItem('Amulet of glory(1)', 'Draynor Village');
+    wait(300);
+  end
+  else
+    writeln('Didnt find Amulet of Glory in inventory or equipment.');
+end;
+
+//WOODCUTTING GUILD, SKILLS NECKLACE
+procedure TeleportToWCGuild();
+
+begin
+  if Inventory.ContainsItem('Skills necklace(1)') then
+  begin
+    if Inventory.ClickItem('Skills necklace(1)', 'Rub') then
+    begin
+      HandleTeleportToWCGuild;
+      writeln('Teleported, waiting now.');
+      wait(300);
+    end;
+  end else
+  if Equipment.ContainsItem('Skills necklace(1)') then
+  begin
+    Equipment.ClickItem('Skills necklace(1)', 'Woodcutting Guild');
+    writeln('Teleported, waiting now.');
+    wait(300);
+  end
+  else
+    writeln('Didnt find Skills necklace in inventory or equipment.');
+end;
+
+//DIGSITE PENDANT TP
+procedure TeleportToFossilIsland();
+
+begin
+  if Inventory.ContainsItem('Digsite pendant (1)') then
+  begin
+    if Inventory.ClickItem('Digsite pendant (1)', 'Rub') then
+    begin
+      WaitUntil(Chat.FindOption('Fossil Island', [0]), 200, 5000);
+      Chat.ClickOption('Fossil Island', False, [CHAT_COLOR_BLACK]);
+      wait(300);
+    end;
+  end else
+  if Equipment.ContainsItem('Digsite pendant (1)') then
+  begin
+    Equipment.ClickItem('Digsite pendant (1)', 'Fossil Island');
+    wait(300);
+  end
+  else
+    writeln('Didnt find Digsite pendant in inventory or equipment.');
+end;
+
+// by Rasta Magician, veteran SRL-er
+function ProgReport(
+                           ResultType:int32; ScriptName, ScriptAuthor, ScriptVersion: String;
+                           VarNames: TStringArray;
+                           VarValues: TVariantArray
+                          ): Variant;
+var
+  TSA        : TStringArray;
+  s,s2       : String;
+  s3         : String := '=';
+  s4         : String := ' ';
+  i, i2, L   : Int32;
+begin
+  if (ResultType = 2) then
+    Result := '';
+
+  if length(VarNames) <> Length(VarValues) then
+  begin
+    Writeln('VarNames and VarValues must be the same length');
+    exit;
+  end;
+  SetLength(TSA, 3 + Length(VarNames) + 4);
+  s2 := 'by '+ScriptAuthor;
+
+  TSA[0] := s3;
+  TSA[1] := ScriptName.Capitalize+' '+ScriptVersion;
+  TSA[2] := s2;
+  TSA[3] := s3;
+
+  i2 := 3 + Length(VarNames);
+
+  for i:= 4 to i2 do
+    L := Max(L, Length(VarNames[i-4]));
+
+  for i:= 4 to i2 do
+  begin
+    s := VarValues[i-4];
+    TSA[i] := Padr((VarNames[i-4]).Capitalize, L)+' : '+ s.Capitalize;
+  end;
+
+  TSA[i2+1] := s3;
+  TSA[i2+2] := ScriptName.Capitalize+' '+ScriptVersion;
+  TSA[i2+3] := s3;
+
+  i2 := 0;
+  for i:= 0 to High(TSA) do
+    i2 := Max(i2, Length(TSA[i]));
+
+  TSA[0]           := s3.Replicate(i2);
+  TSA[3]           := s3.Replicate(i2);
+  TSA[High(TSA)-2] := s3.Replicate(i2);
+  TSA[High(TSA)]   := s3.Replicate(i2);
+
+  TSA[2] := s4.Replicate(round((i2 - Length(TSA[2]))/2)) + TSA[2]; //centering by ScriptAuthor
+  TSA[High(TSA)-1] := s4.Replicate(round((i2 - Length(TSA[High(TSA)-1]))/2)) + TSA[High(TSA)-1];
+
+  for i:= 0 to High(TSA) do
+    if (TSA[i][1] = s3) then
+      case ResultType of
+        0 : writeln     ('[='+Padr(TSA[i], i2)+'=]');
+        1 : writeln     ('[='+Padr(TSA[i], i2)+'=]');
+        2 : Result := Result + '[='+Padr(TSA[i], i2)+'=]' + chr(13);
+        else begin Writeln('Invalid Result Type'); exit; end;
+      end
+    else
+      case ResultType of
+        0 : writeln     ('[ '+Padr(TSA[i], i2)+' ]');
+        1 : writeln     ('[ '+Padr(TSA[i], i2)+' ]');
+        2 : Result := Result + '[ '+Padr(TSA[i], i2)+' ]' + chr(13);
+        else begin Writeln('Invalid Result Type'); exit; end;
+      end;
+
+  if not ResultType = 2 then Result := true;
+end;
+
+
+       {
+function EnableFilters(): Boolean;
+var
+  button: TRSButton;
+begin
+  if Magic.IsFiltered() then
+    Exit(True);
+
+  if not Magic.OpenFilters() then
+    Exit;
+
+  for button in Magic.GetFilterButtons() do
+  begin
+    if not button.Disable then
+    begin
+      if button.Enable() then
+        WaitUntil(button.Enabled(), 300, 4000); //the buttons are quite slow to update...
+    end;
+  end;             magic.open
+
+  Magic.CloseFilters();
+
+  Result := not Magic.IsFiltered();
+end; }
+{var
+  atpa: T2DPointArray;
+  buttonxd : TRSButton;
+begin
+  //recorder.Start(10,'Simba/recordings', [1,300,430,500]);
+  if Magic.DisableFilters then
+  begin
+    writeln('hola');
+  end;
+  buttonxd := Magic.GetFilterButton;
+  mouse.Move(buttonxd.Bounds);
+end.
+
+    }
+
+
+
+
+
+
+
+{===========================================}
+{                HOP WORLDS                 }
+{===========================================}
+
+function TRSLogout.GetWorld: Int32;
+begin
+  if (not Self.IsWorldSwitcherOpen()) then
+  begin
+    Self.Open();
+    if Self.GetButton(ERSLogoutButton.WORLD_SWITCHER).Click then
+      WaitUntil(Self.IsWorldSwitcherOpen(), 500, 6000);
+  end;
+
+  Result := OCR.RecognizeNumber([Self.Bounds.X1+17,Self.Bounds.Y1,Self.Bounds.X1+150,Self.Bounds.Y1+20], TOCRColorFilter.Create([2070783]), RS_FONT_BOLD_12);
+end;
+
+function TRSLogout.GetCurrentWorld: Int32;
+begin
+  if (not Self.IsWorldSwitcherOpen()) then
+  begin
+    Self.Open();
+    if Self.GetButton(ERSLogoutButton.WORLD_SWITCHER).Click then
+      WaitUntil(Self.IsWorldSwitcherOpen(), 500, 6000);
+  end;
+
+  Result := OCR.RecognizeNumber([Self.Bounds.X1+17,Self.Bounds.Y1,Self.Bounds.X1+150,Self.Bounds.Y1+20], TOCRColorFilter.Create([2070783]), RS_FONT_BOLD_12);
+end;
+
+function FindHopperMsg(): Boolean;
+begin
+  if (not RSClient.IsLoggedIn) then Exit;
+  Result := ('finish' in Chat.GetMessage(CHAT_INPUT_LINE - 1, [CHAT_COLOR_BLACK])) or
+            ('finish' in Chat.GetMessage(CHAT_INPUT_LINE - 2, [CHAT_COLOR_BLACK]));
+end;
+
+function TRSLogout.SwitchWorlds(World:Int32): Boolean;
+var
+  B: TBox;
+  mmCP: TPoint;
+  T: TCountdown;
+  Found,Down: Boolean;
+  ListBox: TBox := [Self.Bounds.X1+17,Self.Bounds.Y1+36,Self.Bounds.X1+42,Self.Bounds.Y2-38];
+  VisibleWorld: Int32;
+  MMTiles: TPointArray;
+begin
+  if (Self.GetCurrentWorld = World) then Exit(True);
+
+  // Read the first visible members world from the world list
+  VisibleWorld := OCR.RecognizeNumber(ListBox, TOCRColorFilter.Create([61680,14737632]), RS_FONT_PLAIN_12);
+  Mouse.Move(Self.Bounds.Expand(-5,-36), True);
+
+  Down := SRL.Dice(50);
+
+  T.Init(15000);
+  While InRange(Self.GetScrollPosition, 1, 99) do
+  begin
+    if OCR.LocateText(ListBox, ToStr(World), RS_FONT_PLAIN_12,  TOCRColorFilter.Create([61680,14737632]), B) = 1 then
+    begin
+      Found := True;
+      Break;
+    end;
+
+    Mouse.Scroll(SRL.NormalRange(1,3), Down);
+
+    WaitEx(75, 15);
+    if T.TimeRemaining < 1 then break;
+  end;
+
+  if (not Found) then
+    if (not Down) then
+    begin
+      Mouse.Scroll(SRL.NormalRange(1,3), True);
+      T.Init(15000);
+      While Self.GetScrollPosition < 100 do
+      begin
+        if OCR.LocateText(ListBox, ToStr(World), RS_FONT_PLAIN_12,  TOCRColorFilter.Create([61680,14737632]), B) = 1 then
+        begin
+          Found := True;
+          Break;
+        end;
+
+        Mouse.Scroll(SRL.NormalRange(1,3), True);
+        WaitEx(75, 15);
+        if T.TimeRemaining < 1 then
+        begin
+          Writeln('[SwitchWorlds]: Timeout [0]');
+          Exit;
+        end;
+      end;
+    end else if Down then
+    begin
+      Mouse.Scroll(SRL.NormalRange(1,3), False);
+      T.Init(15000);
+      While Self.GetScrollPosition > 0 do
+      begin
+        if OCR.LocateText(ListBox, ToStr(World), RS_FONT_PLAIN_12,  TOCRColorFilter.Create([61680,14737632]), B) = 1 then
+        begin
+          Found := True;
+          Break;
+        end;
+
+        Mouse.Scroll(SRL.NormalRange(1,3), False);
+        WaitEx(75, 15);
+        if T.TimeRemaining < 1 then
+        begin
+          Writeln('[SwitchWorlds]: Timeout [1]');
+          Exit;
+        end;
+      end;
+    end;
+
+  if Found then
+  begin
+    for 1 to 2 do
+    begin
+      Mouse.Click(B, MOUSE_LEFT);
+      if WaitUntil(FindHopperMsg, 75, 3000) then
+      begin
+        mmCP    := Minimap.Center;
+        MMTiles := [[mmCP.X-4,mmCP.Y],[mmCP.X,mmCP.Y-4],[mmCP.X+4,mmCP.Y],[mmCP.X,mmCP.Y+4]];
+        Mouse.Move(Minimap.StaticToMsRect(MMTiles[Random(0,3)],0));
+        if (not Mainscreen.IsUpText('Walk here', 75)) then
+          ChooseOption.Select('Walk here')
+        else
+          Mouse.Click(MOUSE_LEFT);
+
+        WaitUntil(Minimap.IsPlayerMoving, 115, 2200);
+        While Minimap.IsPlayerMoving do
+          Wait(115);
+      end else
+        break;
+    end;
+
+    Result := True;
+  end;
+end;
+
+function HopWorlds(HopToWorld: Int32): Boolean;
+begin
+  Minimap.WaitPlayerMoving(300, SRL.NormalRange(4500,7000));
+
+  writeln('Hopping to world: ', HopToWorld);
+  Chat.ClickContinue();
+
+  Result := Logout.SwitchWorlds(HopToWorld);
+end;
+
+//Inner Helper Function
+function GetBankTabs(InventoryArray : TRSBankItemArray): TIntegerArray;
+var
+  i: Int32;
+  item: TRSBankItem;
+  tabs: TIntegerArray;
+begin
+  for item in InventoryArray do
+    tabs.Append(Item.Tab);
+  tabs.ClearDuplicates();
+  Result := tabs;
+end;
+
+function RandomizeList(InventoryArray : TRSBankItemArray): TRSBankItemArray;
+var
+  i, randomIndex: Int32;
+  tempitem: TRSBankItem;
+begin
+  for i:= High(InventoryArray) downto Low(InventoryArray) do
+  begin
+    randomIndex := Random(i - Low(InventoryArray)+1)+low(InventoryArray);
+    tempitem:= InventoryArray[i];
+    InventoryArray[i] := InventoryArray[randomIndex];
+    InventoryArray[randomIndex] := tempitem;
+  end;
+  Result := InventoryArray;
+end;
+
+function RandomizeIntList(IntArray : TIntegerArray): TIntegerArray;
+var
+  i, randomIndex: Int32;
+  temp: Int32;
+begin
+  for i:= High(IntArray) downto Low(IntArray) do
+  begin
+    randomIndex := Random(i - Low(IntArray)+1)+low(IntArray);
+    temp := IntArray[i];
+    IntArray[i] := IntArray[randomIndex];
+    IntArray[randomIndex] := temp;
+  end;
+  Result := IntArray;
+end;
+
+procedure WithdrawItemsInRandomOrder(InventoryItems : TRSBankItemArray);
+var
+  tabsarray : TIntegerArray;
+  tab: Int32;
+  item : TRSBankItem;
+begin
+  tabsarray := GetBankTabs(InventoryItems);
+  RandomizeList(InventoryItems);
+  writeln(tabsarray);
+  RandomizeIntList(tabsarray);
+  writeln(tabsarray);
+  for tab in tabsarray do
+  begin
+    for item in InventoryItems do
+    begin
+      if item.Tab = tab then
+        if item.Quantity > 1 then
+        begin
+          Bank.WithdrawItem(item, False);
+        end else
+        begin
+          Bank.WithdrawItem(item, True);
+        end;
+    end;
+  end;
+end;
+
+procedure HopOnMinPlayers(Players : Int32; Worlds : TIntegerArray);
+var
+  tpa : TPointArray;
+  lookup_box : Tbox := [565,9,721,141];
+  dot_color : TCTS2Color := CTS2(14277081, 8, 0.01, 0.01);
+  atpa : T2DPointArray;
+  world, j : Int32;
+begin
+  SRL.FindColors(tpa,dot_color, lookup_box);
+  atpa := tpa.Cluster(1);
+  debug(ATPA);
+  writeln(atpa.Len);
+
+  while (ATPA.len() < Players) do
+  begin
+    writeln('[World Finder] Found ', atpa.Len, ' players, hopping.');
+    if Worlds = [] then
+      Worlds := RSWorldLists.GENERAL;
+
+    for World in Worlds do
+    begin
+      j := Logout.GetWorld;
+      //writeln('Logou.getWorld result: ,', j);
+      Worlds.Remove(World, True);
+      HopWorlds(World);
+      writeln('[World Finder] Hopped to', World);
+      writeln('[World Finder] Esperando que cambie el numero');
+      WaitUntil(Logout.GetWorld <> j, 500, 12000);
+      SRL.FindColors(tpa,dot_color, lookup_box);
+      atpa := tpa.Cluster(1);
+      writeln('[World Finder] Despues de hoppear, encontre ',atpa.Len,' jugadores.');
+      if atpa.Len < Players then
+        break;
+    end;
+  end;
+  writeln('[World Finder] Found ', atpa.Len, ' players, staying in this world.');
+end;
+
+procedure HopOnMaxPlayers(Players : Int32; Worlds : TIntegerArray);
+var
+  tpa : TPointArray;
+  lookup_box : Tbox := [565,9,721,141];
+  dot_color : TCTS2Color := CTS2(14277081, 8, 0.01, 0.01);
+  atpa : T2DPointArray;
+  world, j : Int32;
+begin
+  SRL.FindColors(tpa,dot_color, lookup_box);
+  atpa := tpa.Cluster(1);
+  debug(ATPA);
+  writeln(atpa.Len);
+
+  while (ATPA.len() > Players) do
+  begin
+    writeln('[World Finder] Found ', atpa.Len, ' players, hopping.');
+    if Worlds = [] then
+      Worlds := RSWorldLists.GENERAL;
+
+    for World in Worlds do
+    begin
+      j := Logout.GetWorld;
+      //writeln('Logou.getWorld result: ,', j);
+      Worlds.Remove(World, True);
+      HopWorlds(World);
+      writeln('[World Finder] Hopped to', World);
+      writeln('[World Finder] Esperando que cambie el numero');
+      WaitUntil(Logout.GetWorld <> j, 500, 12000);
+      SRL.FindColors(tpa,dot_color, lookup_box);
+      atpa := tpa.Cluster(1);
+      writeln('[World Finder] Despues de hoppear, encontre ',atpa.Len,' jugadores.');
+      if atpa.Len > Players then
+        break;
+    end;
+  end;
+  writeln('[World Finder] Found ', atpa.Len, ' players, staying in this world.');
+end;
+
+
+{
+var
+  i:int32;
+begin
+  i := antiban.GetUniqueInt(RSWorldLists.GOTR.Len);
+  writeln(i);
+  HopWorlds(RSWorldLists.GOTR[i]);
+end.
+}
+
+{                probar con una leather noma pa ver los true
+
+  if Bank.DepositItem("Green dragon leather", True) and Bank.DepositItem("Green dragonhide", True) then
+  begin
+    wait(120, 180);
+    mouse.move([410,226,434,253], False, EMouseDistribution.MOUSE_DISTRIBUTION_ROWP);
+    WaitUntil(not Inventory.ContainsItem("Green dragonhide"), 200, 600);
+  end;
+  writeln('Inv se bugeo, debugeado');  }

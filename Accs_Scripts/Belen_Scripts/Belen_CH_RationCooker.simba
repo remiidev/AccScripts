@@ -1,0 +1,281 @@
+{$IFNDEF SCRIPT_CHAIN}
+{$I SRL-T/osr.simba}
+{$I WaspLib/osr.simba}
+begin
+Antiban.SetupBiometrics();
+end;
+{$ENDIF}
+{$include_once ../Scripts/Accs_Scripts/RemiLib.simba}
+
+type
+  ERationCookerState = (
+    OPEN_BANK,
+    WITHDRAW_MATS,
+    CLOSE_INTERFACE,
+    DEPOSIT,
+    DO_COOK,
+    BREAK,
+    END_SCRIPT
+   );
+
+  TRationCooker = record
+    State                           : ERationCookerState;
+
+    Leaves_                         : TRSBankItemArray;
+
+    Leaves                          : TRSBankItem;
+    Fish                            : TRSBankItem;
+    Ration                          : TRSBankItem;
+
+    ShutdownTime                    : Int64;
+
+    XPGain,PrevXP                   : Int32;
+    Profit                          : Int32;
+    Actions                         : Int64;
+  end;
+
+{===========================================}
+{            SCRIPT/BOT METHODS             }
+{===========================================}
+
+//DEPOSIT
+function TRationCooker.Deposit(): Boolean;
+begin
+  Bank.Open(ERSBankLocation.CASTLE_WARS);
+  if Bank.DepositItem(Self.Ration, True) then
+  begin
+    Result := WaitUntil(not Inventory.ContainsItem(Self.Ration.Item), 200, 600);
+  end;
+  Self.Actions += 27;
+  Self.Report();
+end;
+
+//COOK
+procedure TRationCooker.Cook();
+var
+  i: Int32;
+
+begin
+  if Antiban.bioDice(96) then
+  begin
+    Inventory.use(0,4);
+  end else
+  begin
+    Inventory.use(Self.Leaves.Item, Self.Fish.Item);
+  end;
+
+  Waituntil(Make.IsOpen, 200, 5000);
+
+  if Make.IsOpen(260, 2500) then
+  begin
+    keyboard.PressKey(32);
+  end;
+
+  if Antiban.bioDice(95) then
+  begin
+    i := antiban.GetUniqueInt(4) + 1;
+  end else
+  begin
+    i := antiban.GetUniqueInt(25) +1;
+  end;
+
+  while (Inventory.CountItem(Self.Fish.Item) > i) do
+  begin
+    wait(800, 1400);
+    Antiban.DoAntiban();
+  end;
+
+  Bank.Hover(ERSBankLocation.CASTLE_WARS, False);
+  Waituntil((not Inventory.ContainsItem(Self.Fish.Item)), 400, 80000);
+  waitEx(80, 220);
+  writeln('Done cooking');
+end;
+
+//WITHDRAW MATS
+procedure TRationCooker.WithdrawMats();
+begin
+  Bank.Open(ERSBankLocation.CASTLE_WARS);
+
+  if not Inventory.ContainsItem(Self.Leaves.item) then
+    Bank.WithdrawItem(Self.Leaves, True);
+
+  if not Inventory.ContainsItem(Self.Fish.item) then
+    Bank.WithdrawItem(Self.Fish, False);
+
+  WaitUntil(Inventory.ContainsItem(Self.Fish.Item), 100, 4000);
+  Bank.Close();
+end;
+
+procedure TRationCooker.Report();
+var
+  gainedXP: Int32;
+begin
+  ClearDebug();
+  Profit := (Self.Actions * 442);
+  gainedXP := (Self.Actions * 51);
+
+  ProgReport(1, 'RationCooker', 'ZYZZ', '420',
+                ['Runtime', 'XP gained', 'Profit made app', 'Actions', 'Until break', 'Shutdown'],
+                [SRL.MsToTime(GetTimeRunning, Time_Short),
+                 ToStr(Round(gainedXP, 4), '(', NumberPerHour(gainedXP,GetTimeRunning), ' / hr)'),
+                 ToStr(Round(Self.Profit, 4), '(', NumberPerHour(Self.Profit,GetTimeRunning), ' / hr)'),
+                 ToStr(Round(Self.Actions, 2), '(', NumberPerHour(Self.Actions,GetTimeRunning), ' / hr)'),
+                 Antiban.TimeUntilBreak(Antiban.Breaks[0]),
+                 SRL.MsToTime(Self.ShutdownTime-GetTimeRunning, Time_Short)]);
+end;
+
+//ANTIBAN
+procedure TRationCooker.SetupAntiban();
+begin
+  Antiban.Skills := [ERSSkill.COOKING, ERSSkill.STRENGTH, ERSSkill.ATTACK];
+  Antiban.MinZoom := 97;
+  Antiban.MaxZoom := 100;
+
+  Antiban.AddTask(ONE_SECOND*45, @Mouse.RandomMovement);
+  Antiban.AddTask(ONE_MINUTE*11, @Antiban.RandomRotate);
+  Antiban.AddTask(ONE_MINUTE*9, @Antiban.Swivel);
+
+  Antiban.AddTask(ONE_MINUTE*3,  @Antiban.DoMidLoseFocus);
+  Antiban.AddTask(ONE_MINUTE*2,  @Antiban.DoShortLoseFocus);
+  Antiban.AddTask(ONE_MINUTE*25, @Antiban.HoverSkills);
+
+  Antiban.AddBreak(ONE_MINUTE*30, ONE_SECOND*90, 0.4, 0.0);
+  Antiban.AddBreak(ONE_MINUTE*50, ONE_MINUTE*4, 0.4, 0.0);
+  Antiban.AddBreak(ONE_MINUTE*30, ONE_MINUTE*2, 0.4, 0.0);
+end;
+
+{===========================================}
+{               GET STATE                   }
+{===========================================}
+//GET STATE
+function TRationCooker.GetState(): ERationCookerState;
+begin
+  if Inventory.ContainsItem(Self.Fish.Item) then
+    Exit(ERationCookerState.DO_COOK);
+
+  if Inventory.ContainsItem(Self.Ration.Item) then
+    Exit(ERationCookerState.DEPOSIT);
+
+  if MainScreen.HasInterface() then
+  begin
+    if Bank.IsOpen() then
+    begin
+      if Inventory.ContainsItem(Self.Ration.Item) then
+        Exit(ERationCookerState.DEPOSIT);
+
+      if (not Inventory.ContainsItem(Self.Fish.Item) or not Inventory.ContainsItem(Self.Leaves.Item)) then
+        Exit(ERationCookerState.WITHDRAW_MATS);
+    end;
+    Exit(ERationCookerState.CLOSE_INTERFACE);
+  end;
+
+  if not Inventory.ContainsItem(Self.Leaves.Item) then
+    Exit(ERationCookerState.WITHDRAW_MATS);
+
+  if not Inventory.ContainsItem(Self.Fish.Item) then
+    Exit(ERationCookerState.WITHDRAW_MATS);
+end;
+
+var
+  RationCooker: TRationCooker;
+{===========================================}
+{                     INIT                  }
+{===========================================}
+
+procedure TRationCooker.Init(MaxTime: UInt64);
+var
+  myBox : TBox;
+  BankSpot : Tpoint;
+begin
+  Mouse.Speed      := 14 + Antiban.GetBehavior(EBioBehavior.MOUSE_SPEED);
+  Mouse.Gravity    := 8  + Round(Antiban.GetBehavior(EBioBehavior.MOUSE_GRAVITY) / 2);
+  Mouse.Wind       := 3  + Round(Antiban.GetBehavior(EBioBehavior.MOUSE_WIND) / 2);
+  Mouse.MissChance := 11 + Antiban.GetBehavior(EBioBehavior.MOUSE_MISS);
+
+  if (not RSClient.IsLoggedIn) then
+    Login.LoginPlayer();
+
+  if (not InRange(Options.GetZoomLevel, 100, 100)) then
+    Options.SetZoomLevel(SRL.TruncatedGauss(100,100));
+  MM2MS.ZoomLevel := Options.GetZoomLevel();
+
+  Self.Leaves := ['Maple leaves', - 1, False, 5, 0];
+  Self.Fish := ['Bass', - 1, False, 5, 0];
+  Self.Ration := ["Forester's ration", -1, False, 6, 0];
+  BankSpot := [424,242]
+
+  if Bank.Open(ERSBankLocation.CASTLE_WARS) then
+  begin
+    Bank.OpenTab(4);
+    Bank.FindItem(Self.Fish.Item, myBox);
+  end;
+
+  if not myBox.Contains(BankSpot) then
+  begin
+    waitEx(250, 50);
+    Mouse.HumanMove(MyBox.Middle);
+    Mouse.DragTo(BankSpot);
+  end;
+
+  while Bank.IsOpen() do
+    Bank.Close();
+
+  //lower pitch
+  MainScreen.SetLowestPitch();
+  MainScreen.GetBankClose();
+
+  Self.SetupAntiban();
+
+  ShutdownTime := GetTimeRunning + MaxTime;
+end;
+
+{===========================================}
+{                     RUN(S)                }
+{===========================================}
+//RUN
+procedure TRationCooker.Run();
+begin
+  while (GetTimeRunning < Self.ShutdownTime) do
+  begin
+    State := Self.GetState();
+    Writeln('Doing: ', State);
+
+    case State of
+      ERationCookerState.OPEN_BANK: Bank.Open(ERSBankLocation.CASTLE_WARS);
+      ERationCookerState.WITHDRAW_MATS: Self.WithdrawMats();
+      ERationCookerState.CLOSE_INTERFACE: MainScreen.CloseInterface();
+      ERationCookerState.DO_COOK: Self.Cook();
+      ERationCookerState.DEPOSIT: Self.Deposit();
+    end;
+  end;
+end;
+
+procedure TRationCooker.ChainerRun(maxTime: Uint32);
+begin
+  writeln('STARTING RationCooker CHAINER RUN');
+
+  Self.Init(maxTime);
+  Self.Run();
+
+  while (Inventory.Count >= 1) do
+  begin
+    if Bank.Open(ERSBankLocation.CASTLE_WARS) then
+    begin
+      Bank.DepositAll();
+      wait(200, 300);
+      Mouse.click([467, 299, 493, 325], 1);
+    end;
+    Bank.close();
+  end;
+
+  Antiban.Tasks := [];
+  Antiban.Breaks := [];
+  writeln('COOK_RATION CHAINER RUN DONE ----------');
+end;
+
+{$IFNDEF SCRIPT_CHAIN}
+begin
+  RationCooker.ChainerRun(40 * ONE_MINUTE);
+end.
+{$ENDIF}
+

@@ -1,0 +1,978 @@
+{$IFNDEF SCRIPT_CHAIN}
+  {$DEFINE SRL_USE_REMOTEINPUT}
+  {$I SRL-T/osr.simba}
+  {$I WaspLib/osr.simba}
+{$ENDIF}
+{$include_once ../Scripts/Accs_Scripts/RemiLib.simba}
+Const
+{ General settings }
+  SKILLTOTRAIN     = 'Strength';
+  FOODNAME         = 'Tuna'; // Fish (or cake) to eat
+  POTIONNAME       = 'Super strength';        // Potion (if any) to drink
+  POTTIME          = 5;         // Time (in mins) to take a sip of a potion
+  NUMBOFPOTS       = 5;         // How many potions to withdraw from the bank
+  USEDBAXESPEC     = False;     // Use dragon battleaxe special boost
+  SPECTIME         = 8;         // Time (in mins) to perform a dragon battleaxe boost
+  HEALPERC         = 45;        // % to heal at
+  DOWALKBACK       = True;      // Walk back to the same spot
+{$IFNDEF SCRIPT_CHAIN}
+  EXPERIMENTALWALK = True;  // Experimental hybrid walking to blend mainscreen walking with minimap walking (false for MS walking)
+{$ENDIF}
+{ Player Settings }
+  PNAME            = 'belentokyo@gmail.com';
+  PPASS            = 'Remerexosrs123';
+  PPIN             = '';
+
+{ Time settings }
+  MAXRUNTIME = 500;// How long (in minutes) to run
+  TAKEBREAKS       = True;      // Take (long) breaks?
+  BREAKAFTER       = '165';     // Break after how many minutes?
+  BREAKFOR         = '13';      // Break for how many minutes?
+
+Type
+  TSandyScript = record
+    Version        : String;
+    WSpots,ESpots  : TPointArray;
+    BankTile,
+    BestTile       : TPoint;
+    UsePots        : Boolean;
+    ChestCol       : TCTS2Color;
+    CmbTimeout     : TCountDown;
+    XPGain,PrevXP  : Int32;
+    ShutdownTime   : Int64;
+    ReportTimer,
+    PotTimer,
+    SpecTimer      : TCountdown;
+    TrueRunTime    : TStopwatch;
+    RSW            : TRSWalker;
+  end;
+
+Var
+  SandyBot: TSandyScript;
+
+procedure TSandyScript.WriteMsg(Message: String);
+begin
+  WriteLn('[SandyBot]: '+Message);
+end;
+
+(*
+TRSBank.ScrollToItem
+~~~~~~~~~~~~
+.. pascal:: function TRSBank.ScrollToItem(Item: TRSItem; Out ItmBox: TBox): Boolean;
+
+Sets the scroll bar in the bank to its top position then drags the scroll bar until the
+given TRSItem is found or the scroll bar is dragged to the max position.
+
+Example
+-------
+
+  if Bank.ScrollToItem('Lobster pot', ItmBox) then
+    Mouse.Move(ItmBox);
+*)
+
+function TRSBank.ScrollToItem(Item: TRSItem; Out ItmBox: TBox): Boolean;
+var
+  T: TCountdown;
+begin
+  if (not Self.IsOpen()) then Exit;
+  if Self.FindItem(Item, ItmBox) then Exit(True);
+
+  // Bank.SetScrollPosition(0); Broken?
+  Mouse.Move([Self.GetScrollBar.SliderRegion.Middle.X, Self.GetScrollBar.SliderRegion.Y1+SRL.NormalRange(1,10)]);
+  Mouse.Click(MOUSE_LEFT);
+
+  WaitEx(110,15);
+  if Self.FindItem(Item, ItmBox) then Exit(True);
+
+  Mouse.Move(Self.Bounds.Expand(-10,-25), True);
+  T.Init(15000);
+
+  While InRange(Self.GetScrollPosition, 0, 99) do
+  begin
+    if Self.FindItem(Item, ItmBox) then Exit(True);
+
+    Mouse.Scroll(Random(1,3), True);
+    WaitEx(450, 50);
+    if T.TimeRemaining < 1 then
+      Break;
+  end;
+end;
+
+(*
+TRSBank.ScrollToItem
+~~~~~~~~~~~~
+.. pascal:: function TRSBank.ScrollToItem(Item: TRSItem; Out ItmPoint: TPoint): Boolean;
+
+Same as TRSBank.ScrollToItem however a TPoint of the middle of the found item is provided.
+
+Example
+-------
+
+  if Bank.ScrollToItem('Lobster pot', ItmPoint) then
+    Mouse.Move(ItmPoint);
+*)
+
+function TRSBank.ScrollToItem(Item: TRSItem; Out ItmPoint: TPoint): Boolean; overload;
+var
+  ItmBox: TBox;
+begin
+  Result := Self.ScrollToItem(Item, ItmBox);
+  if Result then ItmPoint := ItmBox.Middle();
+end;
+
+(*
+TRSBank.ScrollToItem
+~~~~~~~~~~~~
+.. pascal:: function TRSBank.ScrollToItem(Item: TRSItem): Boolean;
+
+Same as TRSBank.ScrollToItem however only confirmation is provided.
+
+Example
+-------
+
+  if Bank.ScrollToItem('Lobster pot') then
+    writeln('Found the lobster pot');
+*)
+
+function TRSBank.ScrollToItem(Item: TRSItem): Boolean; overload;
+var
+  ItmBox: TBox;
+begin
+  Result := Self.ScrollToItem(Item, ItmBox);
+end;
+
+{ End SRL-F import }
+
+procedure TAntiBan.DoSkillHover();
+begin
+  if SRL.Dice(75) then
+  begin
+    case Capitalize(SKILLTOTRAIN) of
+      'Attack','Att'        : Antiban.HoverSkill(ERSSKILL.ATTACK, random(1700, 3200), True);
+      'Strength','Str'      : Antiban.HoverSkill(ERSSKILL.STRENGTH, random(1700, 3200), True);
+      'Defence','Def'       : Antiban.HoverSkill(ERSSKILL.DEFENCE, random(1700, 3200), True);
+      'Ranged','Range','Rng': Antiban.HoverSkill(ERSSKILL.RANGE, random(1700, 3200), True);
+      'Magic','Mage'        : Antiban.HoverSkill(ERSSKILL.MAGIC, random(1700, 3200), True);
+    end;
+  end else
+    Antiban.HoverSkill(ERSSKILL.HITPOINTS, random(1700, 3200), True);
+end;
+
+procedure TAntiban.DoLoseFocus();
+Var T: Int32;
+begin
+  Self.LoseFocus(SRL.NormalRange(3700,5000));
+  Self.DebugLn('Losing focus for '+SRL.MsToTime(T, Time_Short));
+  Self.LoseFocus(T);
+end;
+
+procedure BreakPause(Task: PBreakTask);
+Var T: PBreakTask;
+begin
+  SandyBot.RSW.WalkBlind(SandyBot.BankTile);
+  Wait(SRL.NormalRange(2300,4000));
+  SandyBot.TrueRunTime.Pause;
+  T := Task;
+end;
+
+procedure BreakResume(Task: PBreakTask);
+Var T: PBreakTask;
+begin
+  if GetTimeRunning() > SandyBot.ShutdownTime then
+    TerminateScript('Time to shutdown');
+
+  SandyBot.WalkBack();
+  Wait(SRL.NormalRange(2300,4000));
+  SandyBot.TrueRunTime.Resume;
+  T := Task;
+end;
+
+procedure TSandyScript.SetupAntiban();
+begin
+  Antiban.AddTask(ONE_SECOND*45, @Mouse.RandomMovement);
+  Antiban.AddTask(ONE_MINUTE*3,  @Antiban.RandomRotate);
+  Antiban.AddTask(ONE_MINUTE*1,  @Antiban.DoLoseFocus);
+  Antiban.AddTask(ONE_MINUTE*5,  @Antiban.HoverMSItems);
+  Antiban.AddTask(ONE_MINUTE*8,  @Antiban.HoverMSNPCs);
+  Antiban.AddTask(ONE_MINUTE*10,  @Antiban.HoverMSPlayers);
+  Antiban.AddTask(ONE_MINUTE*15, @Antiban.DoSkillHover);
+
+  Antiban.AddBreak(ONE_MINUTE*60, ONE_MINUTE*4, 0.2, 0.4);
+  Antiban.AddBreak(ONE_MINUTE*30, ONE_MINUTE + 30000, 0.2, 0);
+end;
+
+procedure TSandyScript.Report();
+begin
+  ClearDebug();
+  Inc(Self.XPGain, Max(0, (XPBar.Read()-Self.PrevXP)));
+  Self.PrevXP := XPBar.Read();
+
+  ProgReport(1, 'SandyCrabs', 'Flight', Self.Version,
+                ['Runtime', 'XP gained', 'Until break', 'Shutdown'],
+                [SRL.MsToTime(GetTimeRunning, Time_Short),
+                 ToStr(Round(XPGain, 2), '(', NumberPerHour(XPGain,Self.TrueRunTime.ElapsedTime), ' / hr)'),
+                 Antiban.TimeUntilBreak(Antiban.Breaks[0]),
+                 SRL.MsToTime(Self.ShutdownTime-GetTimeRunning, Time_Short)]);
+end;
+
+procedure TSandyScript.DoBanking();
+var
+  Food: String;
+  T: TCountDown;
+  TPA: TPointArray;
+  ATPA: T2DPointArray;
+  Finder: TRSObjectFinder;
+begin
+  if (not RSClient.IsLoggedIn) then Exit;
+  if (Self.RSW.GetMyPos().DistanceTo(Self.BankTile) >= 15) then
+    Self.RSW.WalkBlind(Self.BankTile);
+
+  Finder.Colors := [Self.ChestCol];
+  Finder.ClusterDistance := 13;
+  ATPA := MainScreen.FindObject(Finder);
+
+  if ATPA.Len > 0 then
+  begin
+    ATPA.SortByMiddle(Mainscreen.Center);
+    for TPA in ATPA do
+    begin
+      Mouse.HumanMove(TPA.Mean);
+      if Bank.Open(Mouse.Position) then
+        break;
+    end;
+  end;
+
+  if (not Bank.IsOpen()) then Exit;
+
+  if Self.UsePots then
+  begin
+    Self.WriteMsg('Withdrawing potions');
+
+    if (not Bank.ScrollToItem(POTIONNAME+'(3)')) then
+    begin
+      if (not Bank.ScrollToItem(POTIONNAME+'(4)')) then
+      begin
+        Self.WriteMsg('Out of potions');
+        Self.UsePots := False;
+      end else
+      begin
+        Bank.WithdrawItem([POTIONNAME+'(4)', NUMBOFPOTS, False], False);
+        Wait(175,350);
+      end;
+    end else
+    begin
+      Bank.WithdrawItem([POTIONNAME+'(3)', NUMBOFPOTS, False], False);
+      Wait(175,350);
+    end;
+  end;
+
+  Self.WriteMsg('Withdrawing food');
+
+  Food := FOODNAME;
+
+  if (not Bank.ScrollToItem(Food)) then
+  begin
+    Bank.Close();
+    Logout.ClickLogout();
+    TerminateScript('Failed to find food');
+    Exit;
+  end;
+
+  if Bank.CountItemStack(Food) < 20 then
+  begin
+    Self.WriteMsg('Food remaining: '+ToStr(Bank.CountItemStack(Food)));
+    Bank.Close();
+    Logout.ClickLogout();
+    TerminateScript('Out of food');
+    Exit;
+  end;
+
+  Bank.WithdrawItem([Food, BANK_WITHDRAW_ALL_BUT_ONE, False], False);
+  Wait(175,350);
+
+  T.Init(SRL.NormalRange(4500,5500));
+  while (not T.IsFinished) do
+  begin
+    if Inventory.ContainsItem(Food) then
+      break;
+    wait(35, 75);
+  end;
+
+  T.Init(SRL.NormalRange(4500,5500));
+  while (not T.IsFinished) do
+  begin
+    if (not Bank.IsOpen()) then
+      break;
+    Bank.Close();
+    Wait(175,350);
+  end;
+end;
+
+function TSandyScript.CheckHealth(): Boolean;
+var
+  PrevTile: TPoint;
+  T: TCountDown;
+  Food: TRSItem;
+  Foods: TRSItemArray;
+begin
+  if (not RSClient.IsLoggedIn) then Exit;
+  if (Minimap.GetHPPercent() > SRL.NormalRange((HEALPERC*0.85),(HEALPERC*1.15))) then
+    Exit;
+
+  Self.WriteMsg('Eating some food');
+
+  Foods := ['Trout','Salmon','Tuna','Lobster','Swordfish','Monkfish',
+            'Shark','Slice of cake','2/3 cake','Cake', Capitalize(FOODNAME)];
+
+  if (not Inventory.ContainsAny(Foods)) then
+  begin
+    PrevTile := Self.RSW.GetMyPos();
+    Self.DoBanking();
+    Self.RSW.WalkBlind(PrevTile);
+  end;
+
+  for Food in Foods do
+    if Inventory.ContainsItem(Food) then
+    begin
+      Result := True;
+      Inventory.ClickItem(Food);
+      break;
+    end;
+
+  T.Init(SRL.NormalRange(2000,3100));
+  while (not T.IsFinished) do
+  begin
+    if (Minimap.GetHPPercent() > HEALPERC) then Exit;
+    wait(45,85);
+  end;
+end;
+
+procedure TSandyScript.DrinkPotion();
+var
+  Pot: TRSItem;
+  Pots: TRSItemArray;
+begin
+  if (not RSClient.IsLoggedIn) then Exit;
+  if (not Self.UsePots) then Exit;
+
+  Pots := [POTIONNAME+'(1)',POTIONNAME+'(2)',
+           POTIONNAME+'(3)',POTIONNAME+'(4)'];
+
+  for Pot in Pots do
+    if Inventory.ContainsItem(Pot) then
+    begin
+      Self.WriteMsg('Taking a sip of a potion');
+      Inventory.ClickItem(Pot);
+      if WaitUntil(Inventory.ContainsItem('Vial'), 115, 2500) then
+        Inventory.ClickItem('Vial', 'Drop');
+      Exit;
+    end;
+end;
+
+procedure TSandyScript.EnableDBaxeSpec();
+var
+  WepSlot: Int32;
+begin
+  if (not RSClient.IsLoggedIn) then Exit;
+  if (not USEDBAXESPEC) then Exit;
+  if Minimap.GetOrbLevel(Minimap.GetSpecAttackCircle) < 100 then Exit;
+
+  if Inventory.FindItem('Dragon battleaxe', WepSlot) then
+  begin
+    Self.WriteMsg('Enabling dragon battleaxe boost');
+    Inventory.ClickItem('Dragon battleaxe');
+    if WaitUntil(not Inventory.ContainsItem('Dragon battleaxe'), 115, 3500) then
+    begin
+      Mouse.HumanMove(Minimap.GetSpecAttackCircle.Mean.Random(8,8,True));
+      Mouse.Click(MOUSE_LEFT);
+      Wait(750, 1150);
+      Inventory.ClickSlot(WepSlot);
+      if WaitUntil(Inventory.ContainsItem('Dragon battleaxe'), 115, 3500) then
+        Exit;
+    end;
+  end;
+end;
+
+function TRSWalker.WalkFinalStep(PlayerPoint, WorldPoint: TPoint; WaitUntilDistance: Int32): Boolean; override;
+var
+  MinimapPoint: TPoint;
+  event_time: Int64;
+begin
+  event_time := GetTickCount();
+
+  // run events
+  if (@Self.OnWalkEvent <> nil) then
+    Self.OnWalkEvent(@Self, PlayerPoint, WorldPoint);
+  if (@Self.OnWalkEventEx <> nil) then
+    Self.OnWalkEventEx(@Self, PlayerPoint, WorldPoint);
+
+  // in case the events used a bit of time, while our character was moving towards a point, we have to update the current position.
+  if GetTickCount() - event_time > 100 then
+    PlayerPoint := Self.GetMyPos();
+
+  if not Self.Enabled then
+    Exit(True);
+
+  MinimapPoint := Self.WorldToMM(PlayerPoint, WorldPoint, Minimap.GetCompassAngle(False));
+  if (not Minimap.IsPointOn(MinimapPoint)) then
+    Exit(False);
+
+  Result := Self.Click(MinimapPoint, 0);
+  if Result then
+    Self.WaitMoving(WorldPoint, WaitUntilDistance);
+end;
+{
+// The traditional "WalkPath" but using a different formula for building paths
+function TRSWalker.WalkPath(Path: TPointArray; WaitUntilDistance: Int32 = 0): Boolean; override;
+  function BuildPath(TPA: TPointArray): TPointArray;
+  var
+    i,j: Int32;
+    Line: TPointArray;
+  begin
+    if EXPERIMENTALWALK then
+    begin
+      for i := 1 to High(TPA) do
+        Result += TPABetweenPoints(TPA[i-1], TPA[i], 15 + Random(-7,7), 7);
+    end else
+    begin
+      for I := 1 to High(TPA) do
+      begin
+        Line := TPAFromLine(TPA[I-1], TPA[I]);
+
+        J := 0;
+        while J < High(Line) do
+        begin
+          Result += Line[J];
+
+          // keep the steps low, as mainscreen walking might just have a few tiles visible when NearZoomMode is set True
+          if (Self.NearZoomMode) and ((Self.ScreenWalk) or (Self.AdaptiveWalk)) then
+            Inc(J, Random(1, 4))
+          else
+            Inc(J, Random(3, 12));
+        end;
+      end;
+
+      Result += TPA[High(TPA)];
+    end;
+  end;
+
+  function AdvancePath(var Index: Int32; PlayerPoint: TPoint): Boolean;
+  var
+    Angle: Double := Minimap.GetCompassAngle(False);
+    Previous: Int32 := Index;
+    Nearest, Furthest: Int32;
+  begin
+    Nearest := Self.Path.Find(Self.Path.Sorted(PlayerPoint)[0]);
+    Self.PathIndex := Nearest;
+
+    while (Nearest < High(Self.Path)) and (not Self.IsWalkable(Self.Path[Nearest+1], PlayerPoint, Angle)) do
+      Inc(Nearest);
+
+    Furthest := Nearest;
+    while (Furthest < High(Self.Path)) and Self.IsWalkable(Self.Path[Furthest+1], PlayerPoint, Angle) do
+      Inc(Furthest);
+
+    Index := Furthest;
+
+    // do the result check before randomness to avoid false error
+    Result := (Index > Previous);
+
+    // 15% chance of randomness else furthest
+    if Random() < 0.15 then
+      Index := Random(Nearest, Furthest);
+  end;
+
+var
+  PlayerPoint: TPoint;
+  Index, Fails: Int32;
+begin
+  Self.Enabled := True;
+  PlayerPoint  := Self.GetMyPos();
+  Self.Path    := BuildPath([PlayerPoint] + Path);
+
+  if Self.AdaptiveWalk then
+  begin
+    Self.AdaptiveToggleDistances.X := RSW_ADAPTIVE_SCREEN_TOGGLE_DISTANCES.X + Random(-6,6);
+    Self.AdaptiveToggleDistances.Y := RSW_ADAPTIVE_SCREEN_TOGGLE_DISTANCES.Y + Random(-16,16);
+    Self.AdaptiveWalkCheck(PlayerPoint);
+  end;
+
+  while Self.Enabled and (Fails < 10) do
+  begin
+    PlayerPoint := Self.GetMyPos();
+
+    if AdvancePath(Index, PlayerPoint) then
+      Fails := 0
+    else
+    begin
+      Inc(Fails);
+
+      // Likely haven't moved far enough to advance to next point
+      if (Fails < 5) then
+      begin
+        Wait(300);
+        Continue;
+      end else begin
+        // screen walking struggles, so disable it
+        if Self.AdaptiveWalk then
+          Self.ScreenWalk := False
+        else if (Fails = 5) then
+          case SRL.Dice(50) of
+            True:  Minimap.SetCompassAngle(Minimap.GetCompassAngle() - SRL.TruncatedGauss(30, 360, 3));
+            False: Minimap.SetCompassAngle(Minimap.GetCompassAngle() + SRL.TruncatedGauss(30, 360, 3));
+          end;
+      end;
+
+      if (Fails mod 2 = 0) then
+        Minimap.WaitFlag();
+    end;
+
+    if Distance(PlayerPoint, Self.Path[Index]) <= 20 then // The next step is very close, let's just MS walk
+      Self.ScreenWalk := True;
+
+    if Index = High(Self.Path) then
+    begin
+      if Self.WalkFinalStep(PlayerPoint, Self.Path[Index], WaitUntilDistance) then
+        Exit(True);
+    end else
+      Self.WalkStep(PlayerPoint, Self.Path[Index]);
+  end;
+
+  if Fails = 10 then
+    Self.DebugLn('Failed to advance path');
+end;
+}
+{$IFNDEF SCRIPT_CHAIN}
+procedure OnWalkEvent(Sender: PRSWalker; Position: TPoint; Destination: TPoint);
+begin
+  if Bank.IsOpen() then
+    Bank.Close;
+
+  if SRL.Dice(5) then
+    Mouse.RandomMovement;
+
+  if EXPERIMENTALWALK then
+    Sender^.ScreenWalk := SRL.Dice(35);
+
+  Position    := [];  // For the sake of mitigating compile warnings
+  Destination := [];
+end;
+{$ENDIF}
+function TRSWalker.PlayerInMMArea(Area: TBox; MyPos: TPoint=[0,0]): Boolean;
+var
+  i: Int32;
+  Rads: Double;
+  MMRect: TRectangle;
+  Dots: TPointArray;
+begin
+  if MyPos.X < 1 then
+    MyPos := Self.GetMyPos();
+  Rads := Minimap.GetCompassAngle(False);
+  Dots := Minimap.GetDots(ERSMinimapDot.PLAYER);
+  MMRect := [Self.WorldToMM(MyPos, [Area.X1,Area.Y1], Rads), Self.WorldToMM(MyPos, [Area.X2,Area.Y1], Rads),
+             Self.WorldToMM(MyPos, [Area.X2,Area.Y2], Rads), Self.WorldToMM(MyPos, [Area.X1,Area.Y2], Rads)];
+
+  for i:=0 to high(Dots) do
+    if MMRect.Contains(Dots[i]) then
+      Exit(true);
+end;
+
+procedure TSandyScript.SwitchSpots();
+var
+  i: Int32;
+  rValArea: TBox;
+  MyPos: TPoint;
+begin
+  if (not RSClient.IsLoggedIn) then Exit;
+
+  MyPos := Self.RSW.GetMyPos();
+
+  if MyPos.X > Self.BankTile.X then // East of bank
+  begin
+    Self.RSW.WalkBlind(Self.BankTile, RandomRange(5, 8));
+    Self.WSpots.Sort(Self.BankTile);
+    for i:=0 to high(Self.WSpots) do
+    begin
+      rValArea := Box(Self.WSpots[i], 10, 10);
+      Self.RSW.WalkBlind([Self.WSpots[i].X+10,Self.WSpots[i].Y]);
+      if (not Self.RSW.PlayerInMMArea(rValArea)) then // No player in this spot
+      begin
+        Self.RSW.WalkBlind(Self.WSpots[i]);
+        Self.RSW.WalkFinalStep(Self.RSW.GetMyPos, Self.WSpots[i], 0);
+        break;
+      end else
+        Self.WriteMsg('Player already in this spot, moving on');
+    end;
+  end else  // West of bank
+  begin
+    Self.RSW.WalkBlind(Self.BankTile, RandomRange(5, 8));
+    Self.ESpots.Sort(Self.BankTile);
+    for i:=0 to high(Self.ESpots) do
+    begin
+      rValArea := Box(Self.ESpots[i], 10, 10);
+      Self.RSW.WalkBlind([Self.ESpots[i].X-10,Self.ESpots[i].Y]);
+      if (not Self.RSW.PlayerInMMArea(rValArea)) then // No player in this spot
+      begin
+        Self.RSW.WalkBlind(Self.ESpots[i]);
+        Self.RSW.WalkStep(Self.RSW.GetMyPos, Self.ESpots[i]);
+        break;
+      end else
+        Self.WriteMsg('Player already in this spot, moving on');
+    end;
+  end;
+end;
+
+procedure TSandyScript.WalkBack();
+var
+  MyArea: TBox := Box(Self.BestTile, 10, 10);
+begin
+  if (not RSClient.IsLoggedIn) then Exit;
+
+  if Self.RSW.GetMyPos.X > Self.BankTile.X then // East of bank
+  begin
+    Self.RSW.WalkBlind(Self.BankTile, SRL.NormalRange(4,11));
+    Self.RSW.WalkBlind([2177,2588], SRL.NormalRange(4,11));
+    Self.RSW.WalkBlind([Self.BestTile.X,Self.BestTile.Y-10]);
+    if Self.RSW.PlayerInMMArea(MyArea) then
+    begin
+      Self.WriteMsg('Player stole my spot, choosing another');
+      Self.SwitchSpots;
+      Exit;
+    end;
+  end else
+  begin
+    Self.RSW.WalkBlind(Self.BankTile, SRL.NormalRange(4,11));
+    Self.RSW.WalkBlind([Self.BestTile.X+10,Self.BestTile.Y]);
+    if Self.RSW.PlayerInMMArea(MyArea) then
+    begin
+      Self.WriteMsg('Player stole my spot, choosing another');
+      Self.SwitchSpots;
+      Exit;
+    end;
+  end;
+
+  Self.RSW.WalkBlind(Self.BestTile);
+  Self.RSW.WalkFinalStep(Self.RSW.GetMyPos, Self.BestTile, 0);
+end;
+
+procedure TSandyScript.GetBestTile();
+var
+  AllTiles: TPointArray;
+begin
+  AllTiles := Self.WSpots.Combine(Self.ESpots);
+  AllTiles.Sort(Self.RSW.GetMyPos());
+  Self.BestTile := AllTiles[0];
+end;
+
+procedure TSandyScript.Init(chainer_runtime : UInt32);
+var
+  mypos_ : Tpoint;
+  Inventory_ : TRSBankItemArray;
+  i : int32;
+  inventoryitems: TRSItemArray;
+begin
+  writeln('RUNNING ZYZZ OVERLOADED INIT');
+//  Self.Version            := 'Rev '+{$MACRO SCRIPT_REVISION};
+  Mouse.Speed      := 14 + Antiban.GetBehavior(EBioBehavior.MOUSE_SPEED);
+  Mouse.Gravity    := 8  + Round(Antiban.GetBehavior(EBioBehavior.MOUSE_GRAVITY) / 2);
+  Mouse.Wind       := 3  + Round(Antiban.GetBehavior(EBioBehavior.MOUSE_WIND) / 2);
+  Mouse.MissChance := 11 + Antiban.GetBehavior(EBioBehavior.MOUSE_MISS);
+  Mouse.CanIdle    := True;
+  writeln('mouse speed de 14 + antiban bio: ', Mouse.Speed);
+
+  RSClient.Image.Clear(Mainscreen.Bounds);
+
+  if (not RSClient.IsLoggedIn) then
+    if Login.GetPlayer.Password <> '' then
+      Login.LoginPlayer
+    else
+    begin
+      Self.WriteMsg('No player credentials');
+      Exit;
+    end;
+
+  MM2MS.ZoomLevel         := Options.GetZoomLevel();
+  Antiban.OnStartBreak    := @BreakPause;
+  Antiban.OnFinishBreak   := @BreakResume;
+  Self.UsePots            := POTIONNAME <> '';
+  Self.PrevXP             := XPBar.Read();
+
+
+//SETUP BANK/INVENTORY + ADD REGIONS
+  begin
+    if Bank.Open(ERSBankLocation.CASTLE_WARS) then
+    begin
+      Inventory_ += TRSBankItem.Setup('Skills necklace(1)', 1, False);
+      Inventory_[0].Tab := 6; Inventory_[0].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Rune scimitar', 1, False);
+      Inventory_[1].Tab := 6; Inventory_[1].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Combat bracelet(1)', 1, False);
+      Inventory_[2].Tab := 6; Inventory_[2].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Climbing boots', 1, False);
+      Inventory_[3].Tab := 6; Inventory_[3].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Rune chainbody', 1, False);
+      Inventory_[4].Tab := 6; Inventory_[4].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Warrior ring', 1, False);
+      Inventory_[5].Tab := 6; Inventory_[5].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Amulet of glory', 1, False);
+      Inventory_[6].Tab := 6; Inventory_[6].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Ring of dueling(1)', 1, False);
+      Inventory_[7].Tab := 5; Inventory_[7].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Super strength(4)', 5, False);
+      Inventory_[8].Tab := 6; Inventory_[8].Scroll := 0;
+          {
+      Inventory_ += TRSBankItem.Setup('Skills necklace(1)', 1, False);
+      Inventory_[0].Tab := 1; Inventory_[0].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Dragon defender', 1, False);
+      Inventory_[1].Tab := 2; Inventory_[1].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Barrows gloves', 1, False);
+      Inventory_[2].Tab := 2; Inventory_[2].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Dragon boots', 1, False);
+      Inventory_[3].Tab := 2; Inventory_[3].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Bandos tassets', 1, False);
+      Inventory_[4].Tab := 2; Inventory_[4].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Berserker ring (i)', 1, False);
+      Inventory_[5].Tab := 2; Inventory_[5].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Amulet of fury', 1, False);
+      Inventory_[6].Tab := 2; Inventory_[6].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Ring of dueling(1)', 1, False);
+      Inventory_[7].Tab := 1; Inventory_[7].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Super strength(4)', 5, False);
+      Inventory_[8].Tab := 6; Inventory_[8].Scroll := 0;
+      }
+      inventoryitems += 'Skills necklace(1)';
+      inventoryitems += 'Ring of dueling(1)';
+      inventoryitems += 'Super strength(4)';
+
+      for i := 0 to High(Inventory_) do
+      begin
+        Bank.WithdrawItem(Inventory_[i], False);
+        Wait(0, 72);
+      end;
+
+    end;
+  end;
+
+  while Bank.IsOpen() do
+    Bank.Close();
+
+  while not Inventory.IsOpen() do
+    Inventory.Open();
+
+  for i := 0 to High(Inventory_) do
+  begin
+    if not inventoryitems.Contains(Inventory_[i].Item) then
+    begin
+      Inventory.ClickItem(Inventory_[i].Item);
+      Wait(0, 72);
+    end;
+  end;
+
+//TRAVEL
+  Self.RSW.SetupRegions([RSRegions.CASTLE_WARS,[1600,1404,2963,2938]], 4);
+
+  mypos_ := Self.RSW.GetMyPos();
+  wait(300, 800);
+
+  while RSRegions.CASTLE_WARS.Contains(rsw.GetMyPos) do
+  begin
+    TeleportToWCGuild;
+    waitUntil(not RSRegions.CASTLE_WARS.Contains(rsw.GetMyPos), 400, 10000);
+    writeln('Teleported');
+    wait(200, 600);
+  end;
+
+  for 1 to 10 do
+  begin
+    if Self.rsw.WebWalk([2264, 2604]) then
+    begin
+      wait(90, 220);
+      break;
+    end else
+    begin
+      writeln('failed webwalk');
+      writeln(rsw.GetMyPos);
+    end;
+  end;
+
+  for 1 to 10 do
+  begin
+    if rsw.WebWalk([2264, 2604]) then
+    begin
+      wait(90, 220);
+      break;
+    end else
+    begin
+      writeln('failed webwalk');
+      writeln(rsw.GetMyPos);
+    end;
+  end;
+  //Self.RSW.SetupRegions([RSRegions.CASTLE_WARS,[1600,1404,2963,2938]], 4);
+  //Self.RSW.AdaptiveWalk := True;
+  with Self do
+  begin
+
+    RSW.ScreenWalk     := True;
+    ESpots             := [[2322,2583],[2342,2583],[2390,2585],[2454,2589],[2496,2589],[2486,2615],[2554,2587]];
+    WSpots             := [[2168,2575],[2132,2547],[2094,2547],[2136,2503]];
+    BankTile           := [2278,2603];
+    ChestCol           := CTS2(8950669, 16, 0.10, 0.17);
+    if DOWALKBACK then
+      GetBestTile();
+
+    ReportTimer.Init(ONE_MINUTE*1);
+    CmbTimeout.Init(RandomRange(22000,52000));
+    PotTimer.Init((ONE_MINUTE*POTTIME)+Random(-ONE_MINUTE,ONE_MINUTE));
+    SpecTimer.Init((ONE_MINUTE*SPECTIME)+Random(-ONE_MINUTE,ONE_MINUTE));
+    Self.SetupAntiban();
+    TrueRunTime.Start();
+
+    ShutdownTime := GetTimeRunning + chainer_runtime;
+    writeln('SANDYCRABS WILL RUN FOR :', (ShutdownTime-GetTimeRunning)/60000);
+  end;
+end;
+
+
+
+procedure TSandyScript.Run();
+var
+  CachedScriptWalker : PRSWalker;
+begin
+  if (not RSClient.IsLoggedIn) then
+    if PNAME <> '' then
+      Login.LoginPlayer
+    else
+    begin
+      Self.WriteMsg('No player credentials');
+      Exit;
+    end;
+
+  if (not WaitUntil(Length(MainScreen.FindHitsplats()) > 0, 125, 3000)) then
+    Self.SwitchSpots;
+
+  while (getTimeRunning() < Self.ShutdownTime) do
+  begin
+    if (not RSClient.IsLoggedIn) then
+    begin
+      if Login.Players[0].Password <> '' then
+        Login.LoginPlayer
+      else
+      begin
+        Logout.ClickLogout();
+        TerminateScript('Not logged in');
+      end;
+    end;
+
+    if Chat.FindMessage('ammo') then
+    begin
+      Self.WriteMsg('Out of ammo!');
+      Self.RSW.WalkBlind(Self.BankTile);
+      Logout.ClickLogout();
+      TerminateScript('Out of ammo');
+    end;
+
+    if Chat.FindMessage('to cast') then
+    begin
+      Self.WriteMsg('Out of runes!');
+      Self.RSW.WalkBlind(Self.BankTile);
+      Logout.ClickLogout();
+      TerminateScript('Out of runes');
+    end;
+
+    if Self.CheckHealth() then
+      Self.CmbTimeout.Restart();
+
+    if Length(MainScreen.FindHitsplats()) > 0 then
+      Self.CmbTimeout.Restart();
+
+    if Self.CmbTimeout.IsFinished then
+    begin
+      if DOWALKBACK then
+        Self.WalkBack()
+      else
+        Self.SwitchSpots();
+      Self.CmbTimeout.Restart();
+    end;
+
+    if Self.ReportTimer.IsFinished() then
+    begin
+      Self.Report();
+      Self.ReportTimer.Restart();
+    end;
+
+    if Self.PotTimer.IsFinished then
+    begin
+      Self.DrinkPotion();
+      Self.PotTimer.Restart(SRL.NormalRange(5000, 15000));
+    end;
+
+    if Self.SpecTimer.IsFinished then
+    begin
+      Self.EnableDBaxeSpec();
+      Self.SpecTimer.Restart(SRL.NormalRange(5000, 15000));
+    end;
+
+    if (not Self.RSW.GetMyPos.InBox([1994,2375,2744,2748])) then
+    begin
+      Self.WriteMsg('Player is lost');
+      Logout.ClickLogout();
+      TerminateScript('Player is lost');
+    end;
+
+    Antiban.DoAntiban();
+    Wait(250);
+  end;
+
+  Self.RSW.WalkBlind(Self.BankTile);
+end;
+
+procedure TSandyScript.ChainerRun(maxTime: Int32);
+begin
+  writeln('STARTING SANDYCRABS CHAINER RUN');
+  Self.Init(maxTime);
+  repeat
+    begin
+      Self.Run();
+    end;
+  until (GetTimeRunning() > Self.ShutdownTime);
+
+  while not RSRegions.CASTLE_WARS.Contains(Self.RSW.getmypos()) do
+  begin
+    TeleportToCastleWars;
+    if not WaitUntil(RSRegions.CASTLE_WARS.Contains(Self.RSW.getmypos()),300, 3000) then
+    begin
+      writeln('Failed teleporting to Castle Wars, retrying');
+    end else
+    begin
+    writeln('Teleported to castle wars');
+    end;
+  end;
+
+  while (Inventory.Count >= 1) do
+  begin
+    writeln('inv count:');
+    writeln(Inventory.Count());
+    WaitUntil(RSRegions.CASTLE_WARS.Contains(Self.RSW.getmypos()), 200, 2000);
+    waitEx(250, 50);
+    Self.RSW.webwalk([5166, 4115], 10);
+
+    if Bank.open() then
+    begin
+      Bank.DepositAll();
+      wait(200, 300);
+      Mouse.click([467, 299, 493, 325], 1);
+    end;
+    Bank.close();
+  end;
+
+  Self.RSW.Free();
+  Antiban.Tasks := [];
+  Antiban.Breaks := [];
+  writeln('SANDYCRABS CHAINER RUN DONE ----------');
+end;
+
+{$IFNDEF SCRIPT_CHAIN}
+begin
+  SandyBot.ChainerRun(12121);
+end.
+{$ENDIF}

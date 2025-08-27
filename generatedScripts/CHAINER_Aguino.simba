@@ -1,0 +1,224 @@
+{$DEFINE SCRIPT_CHAIN}
+{$DEFINE SRL_USE_REMOTEINPUT}
+{$I SRL-T/osr.simba}
+{$I WaspLib/osr.simba}
+{$I Farm/farmv4.simba}
+{$include_once ../Scripts/Accs_Scripts/RemiLib.simba}
+var
+  Farm      : TFarmRun;
+{$I ../Scripts/Accs_Scripts/Aguino_Scripts/BirdhouseRunner_Aguino.simba}
+
+
+
+begin
+  Login.AddPlayer('aguino20', 'agugagu123');
+  Login.PlayerIndex := High(Login.Players);
+  if (not RSClient.IsLoggedIn) then
+    if Login.GetPlayer.Password <> '' then
+      Login.LoginPlayer
+    else
+    begin
+      writeln('No player credentials');
+      Exit;
+    end;
+  Antiban.SetupBiometrics();
+end;
+
+{===========================================}
+{               FARM METHODS                }
+{===========================================}
+
+procedure Farm.WithdrawFarmItems();
+var
+  I : Int32;
+  Inventory_    : TRSBankItemArray;
+  inventoryitems: TRSItemArray;
+begin
+  repeat
+  begin
+    if Bank.Open(ERSBankLocation.CASTLE_WARS) then
+    begin
+    //ITEMS FOR FARMRUN
+      Inventory_ += TRSBankItem.Setup('Bottomless compost bucket', 1, False);
+      Inventory_[0].Tab := 6; Inventory_[0].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Seed dibber', 1, False);
+      Inventory_[1].Tab := 6; Inventory_[1].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Magic secateurs', 1, False);
+      Inventory_[2].Tab := 6; Inventory_[2].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Kwuarm seed', -1, False);
+      Inventory_[3].Tab := 6; Inventory_[3].Scroll := 92;
+      Inventory_ += TRSBankItem.Setup('Spade', 1, False);
+      Inventory_[4].Tab := 6; Inventory_[4].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Rake', 1, False);
+      Inventory_[5].Tab := 6; Inventory_[5].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Ectophial', -1, False);
+      Inventory_[6].Tab := 1; Inventory_[6].Scroll := 92;
+      Inventory_ += TRSBankItem.Setup('Catherby teleport', 1, False);
+      Inventory_[7].Tab := 1; Inventory_[7].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Hosidius teleport', 1, False);
+      Inventory_[8].Tab := 1; Inventory_[8].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Skills necklace(6)', 1, False);
+      Inventory_[9].Tab := 1; Inventory_[9].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Amulet of glory(1)', 1, False);
+      Inventory_[10].Tab := 1; Inventory_[10].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Ring of dueling(1)', 1, False);
+      Inventory_[11].Tab := 1; Inventory_[11].Scroll := 0;
+
+      inventoryitems += 'Bottomless compost bucket';
+      inventoryitems += 'Seed dibber';
+      inventoryitems += 'Kwuarm seed';
+      inventoryitems += 'Rake';
+      inventoryitems += 'Spade';
+      inventoryitems += 'Catherby teleport';
+      inventoryitems += 'Amulet of glory(1)';
+
+      inventoryitems += 'Hosidius teleport';
+      inventoryitems += 'Ectophial';
+
+      for i := 0 to High(Inventory_) do
+      begin
+        Bank.WithdrawItem(Inventory_[i], True);
+        Wait(0, 72);
+      end;
+    end else
+    begin
+      writeln(Self.rsw);
+      Self.RSW.webwalk([5166, 4115]);
+    end;
+  end;
+  Until Inventory.count >= 1;
+
+  while Bank.IsOpen() do
+    Bank.Close();
+
+  while not Inventory.IsOpen() do
+    Inventory.Open();
+
+  for i := 0 to High(Inventory_) do
+  begin
+    if not inventoryitems.Contains(Inventory_[i].Item) then
+    begin
+      Inventory.ClickItem(Inventory_[i].Item);
+      Wait(0, 72);
+    end;
+  end;
+  wait(200, 560);
+end;
+
+procedure FarmRunStart();
+var
+  pos : TPoint;
+  I : Int32;
+  Inventory_    : TRSBankItemArray;
+begin
+  for I := 0 to High(Antiban.tasks) do
+    Antiban.Tasks[I].Countdown.Pause;
+  writeln('tasks parados');
+
+  WL.Activity.Pause;
+
+  Bank.Open(ERSBankLocation.CASTLE_WARS);
+  Farm.WithdrawFarmItems();
+
+  while RSRegions.CASTLE_WARS.Contains(Farm.RSW.GetMyPos) do
+  begin
+    if  Inventory.ClickItem('Catherby teleport', 'Break') then
+      WaitUntil(RSRegions.CATHERBY.Contains(Farm.RSW.GetMyPos),300,6000);
+    Break; //THIS IS THE START OF MY FARM RUN
+  end;
+end;
+
+procedure FarmRunComplete();
+var
+  I : Int32;
+  Inventory_    : TRSBankItemArray;
+begin
+  for I := 0 to High(Antiban.tasks) do
+    Antiban.Tasks[I].Countdown.Resume;
+
+  while not isPlayerIn(Farm.rsw.GetMyPos, RSRegions.CASTLE_WARS) do
+  begin
+    TeleportToCastleWars;
+    waitUntil(isPlayerIn(Farm.rsw.GetMyPos, RSRegions.CASTLE_WARS), 400, 10000);
+  end;
+  while (Inventory.Count >= 1) do
+  begin
+    writeln('inv count:');
+    writeln(Inventory.Count());
+    Farm.RSW.webwalk([5166, 4115]);
+    if Bank.open(ERSBankLocation.CASTLE_WARS) then
+    begin
+      Bank.DepositAll();
+      wait(200, 300);
+      Mouse.click([467, 299, 493, 325], 1);
+    end;
+    Bank.Close();
+  end;
+  writeln('FARM RUN DONE ----------');
+  WL.Activity.Resume;
+end;
+
+begin
+  Farm.OnStart       := @FarmRunStart;
+  Farm.OnComplete    := @FarmRunComplete;
+  Farm.ResurrectCrop := False;
+  Farm.CompostMethod := ECompostMethod.BOTTOMLESS;
+
+  Farm.AddPatch(EFarmPatch.CATHERBY_HERB, ETravelMethod.CATHERBY_TABLET, 'Kwuarm seed');
+  Farm.AddPatch(EFarmPatch.HOSIDIOUS_HERB, ETravelMethod.HOSIDIOUS_TABLET, 'Kwuarm seed');
+  Farm.AddPatch(EFarmPatch.PHASMATYS_HERB, ETravelMethod.ECTOPHIAL, 'Kwuarm seed');
+  Farm.AddPatch(EFarmPatch.ARDY_HERB, ETravelMethod.FISHING_GUILD, 'Kwuarm seed');
+  Farm.AddPatch(EFarmPatch.FALLY_HERB, ETravelMethod.FALLY_GLORY, 'Kwuarm seed');
+
+  Farm.Init;
+  Farm.ReadyTimer.Init(0);
+end;
+
+{$SCOPEDENUMS ON}
+        {$I ../Scripts/Accs_Scripts/Aguino_Scripts/nmz_Aguino.simba}
+    
+        {$I ../Scripts/Accs_Scripts/Aguino_Scripts/RationCooker_Aguino.simba}
+    
+        {$I ../Scripts/Accs_Scripts/Aguino_Scripts/Agilityskunk_Aguino.simba}
+    
+        {$I ../Scripts/Accs_Scripts/Aguino_Scripts/TitheFarm_Aguino.simba}
+    
+        {$I ../Scripts/Accs_Scripts/Aguino_Scripts/ArdyKnights_Aguino.simba}
+    {$SCOPEDENUMS OFF}
+//TO DO:
+//For farm runs in multiple houses:  Look for the house my level
+                            //       If not found,
+                            //       Look for one a level lower
+begin
+
+Farm.DoFarmRun();
+Runner.ChainerRun();
+NMZFighter.ChainerRun(6893078);
+
+Wait(10754398);
+
+Farm.DoFarmRun();
+Runner.ChainerRun();
+Ration_cooker.ChainerRun(5491027);
+
+Wait(7022400);
+
+Farm.DoFarmRun();
+Runner.ChainerRun();
+agility.ChainerRun(7659168);
+
+Farm.DoFarmRun();
+Runner.ChainerRun();
+TitheFarmer.ChainerRun(6883594);
+
+Wait(6801768);
+
+Farm.DoFarmRun();
+Runner.ChainerRun();
+KnightsThiever.ChainerRun(6568363);
+
+Farm.DoFarmRun();
+Runner.ChainerRun();
+NMZFighter.ChainerRun(5440766);
+
+end.

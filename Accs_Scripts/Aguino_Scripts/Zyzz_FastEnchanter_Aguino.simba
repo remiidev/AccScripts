@@ -1,0 +1,419 @@
+{$IFNDEF SCRIPT_CHAIN}
+  {$I SRL-T/osr.simba}
+  {$I WaspLib/osr.simba}
+{$ENDIF}
+
+{----------------------------------------------------------------------
+                         ZYZZ FAST ENCHANTER
+---------------------------------------------------------------------- }
+type
+  EEnchanterState = (
+    OPEN_BANK,
+    WITHDRAW_COSMIC,
+    WITHDRAW_MATS,
+    WITHDRAW_ITEM,
+
+    CLOSE_INTERFACE,
+
+    GET_STAFF,
+    HANDLE_WARNING,
+
+    CLOSE_CONTEXT,
+    DEPOSIT,
+    ENCHANT_DECIDER_LAZY,
+    ENCHANT,
+    EQUIP_STAFF,
+    BREAK,
+    END_SCRIPT
+  );
+
+  TEnchanter = record(TBaseBankScript)
+    State: EEnchanterState;
+
+    Item : TRSBankItem;
+    RawItem : TRSBankItem;
+
+    CosmicItem : TRSBankItem;
+
+    Staff : TRSBankItem;
+
+    PrevWasLazy : Boolean;
+  end;
+
+var
+  Enchanter : TEnchanter;
+
+//ANTIBAN
+procedure TEnchanter.SetupAntiban();
+begin
+  Antiban.Skills := [ERSSkill.MAGIC, ERSSkill.TOTAL];
+  Antiban.MinZoom := 35;
+  Antiban.MaxZoom := 75;
+
+  //inherited;
+end;
+
+//GET STATE
+function TEnchanter.GetState(): EEnchanterState;
+var
+  slots1 : TIntegerArray;
+  slots2 : TIntegerArray;
+begin
+  if not Inventory.ContainsItem('Cosmic rune') then
+    Exit(EEnchanterState.WITHDRAW_COSMIC);
+
+  if ChooseOption.IsOpen() then
+    Exit(EEnchanterState.CLOSE_CONTEXT);
+
+  if MainScreen.HasInterface() then
+  begin
+    if Bank.IsOpen() then
+    begin
+      if not Inventory.ContainsItem(Self.item) and Inventory.ContainsItem(Self.item2) then
+        Exit(EEnchanterState.DEPOSIT);
+
+      if not Inventory.ContainsItem(Self.item) then
+        Exit(EEnchanterState.WITHDRAW_MATS);
+
+      if Inventory.FindItems([Self.item], slots1) and Inventory.FindItems([Self.item2], slots2) then
+        Exit(EEnchanterState.ENCHANT);
+
+      Exit(EEnchanterState.CLOSE_INTERFACE);
+    end;
+  if Chat.HasContinue() then
+    Exit(EEnchanterState.HANDLE_WARNING);
+
+  end;
+
+  if not Inventory.ContainsItem(Self.item) then
+      Exit(EEnchanterState.OPEN_BANK);
+
+  if not Inventory.ContainsItem(Self.item2) then
+    if Self.PrevWasLazy then
+    begin
+      Exit(EEnchanterState.ENCHANT_DECIDER_LAZY);
+    end else
+    begin
+      Exit(EEnchanterState.ENCHANT);
+    end;
+end;
+
+//RUN
+procedure TEnchanter.Run();
+begin
+  repeat
+    State := Self.GetState();
+    Self.SetAction(ToStr(State));
+
+    case State of
+      EEnchanterState.GET_STAFF: Self.GetStaff();
+      EEnchanterState.EQUIP_STAFF: Self.EquipStaff();
+      EEnchanterState.WITHDRAW_COSMIC: Self.WithdrawCosmics();
+      EEnchanterState.OPEN_BANK: Bank.Open(ERSBankLocation.CASTLE_WARS);
+      EEnchanterState.WITHDRAW_MATS: Self.WithdrawMats();
+      EEnchanterState.CLOSE_INTERFACE: MainScreen.CloseInterface();
+      EEnchanterState.ENCHANT: Self.EnchantDecider();
+      EEnchanterState.ENCHANT_DECIDER_LAZY: Self.EnchantDeciderLazy();
+      EEnchanterState.DEPOSIT: Bank.DepositAllBut(Self.BankTab, ['Cosmic Rune']);
+    end;
+    until Self.ShouldStop();
+end;
+
+//ENCHANT_DECIDER
+procedure TEnchanter.EnchantDecider();
+begin
+  Antiban.DoAntiban();
+  if SRL.Dice(8) then
+  begin
+    Writeln('Doing a lazy enchant');
+    Self.LazyEnchant();
+    Self.PrevWasLazy := True;
+  end
+  else
+  begin
+    Writeln('Doing a fast enchant');
+    Self.Enchant();
+    Self.PrevWasLazy := False;
+  end
+end;
+
+//ENCHANT_DECIDER PREV LAZY
+procedure TEnchanter.EnchantDeciderLazy();
+begin
+  if SRL.Dice(75) then
+  begin
+    Writeln('Doing a lazy enchant');
+    Self.LazyEnchant();
+    Self.PrevWasLazy := True;
+  end
+  else
+  begin
+    Writeln('Doing a fast enchant');
+    Self.Enchant();
+    Self.PrevWasLazy := False;
+  end
+end;
+
+//ENCHANT
+procedure TEnchanter.Enchant();
+var
+  Slot : Int32;
+  Ready : Boolean;
+  P : TPoint;
+begin
+  Ready := False;
+  Magic.open();
+  P := Point(710, 326);
+  Mouse.move(P, 12);
+  Wait(100,200);
+  Mouse.Click(1);
+  Wait(200,300);
+  //writeln('Ready set to FALSE');
+  //writeln('CAST LVL 4 ENCHANT');
+  while not Ready do
+  begin
+    //writeln('COMIENZA LOOP NOT READY');
+    if Inventory.ContainsItem(item) then
+    begin
+      P := Point(710, 326);
+      //writeln('INVENTORY CONTAINS DIAMOND BRACELET');
+      Slot := Self.getFirstItemSlot();
+      if (Slot = 26) then
+      begin
+        Inventory.ClickSlot(Slot, '>');
+        Bank.Open(ERSBankLocation.CASTLE_WARS);
+        Exit;
+      end;
+      Inventory.ClickSlot(Slot, '>');
+      Wait(70, 100);
+      Mouse.move(P, 12);
+      Self.TotalActions += 1;
+      WaitUntil(Magic.IsOpen, 70, 4000);
+      if not magic.IsOpen then
+      begin
+        Magic.open();
+        Mouse.move(P, 12);
+        wait(550, 650);
+        mouse.click(1);
+      end;
+      //writeln('Slot es');
+      //writeln(Slot);
+      if not (Slot = 26) then
+      begin
+        wait(550, 650);
+        //writeln('click magia');
+        mouse.click(1);
+      end
+      else
+        exit;
+    end
+    else
+      Ready := True;
+  end;
+end;
+
+//GET ITEM SLOT
+function TEnchanter.getFirstItemSlot(): Int32;
+var
+  slots: TIntegerArray;
+begin
+  if Inventory.FindItems([Self.item], slots) then
+    Result := Slots[0];
+end;
+
+//LAZY ENCHANT
+procedure TEnchanter.LazyEnchant();
+var
+  i : Int32;
+begin
+  i := random(0, 27);
+  Magic.open();
+  Mouse.move([710,326], 11);
+  Wait(100, 200);
+  mouse.click(1);
+  WaitUntil(Inventory.IsOpen, 200, 1000);
+  Inventory.ClickSlot(i, '>');
+  WaitUntil(not Inventory.ContainsItem(Self.item), 200, 400000);
+  Self.TotalActions += 27;
+  WaitEx(10000, 9000);
+  Antiban.DoAntiban();
+end;
+
+//WITHDRAW COSMICS
+procedure TEnchanter.WithdrawCosmics();
+begin
+  if MainScreen.HasInterface then
+    MainScreen.CloseInterface;
+  Bank.Open(ERSBankLocation.CASTLE_WARS);
+  Bank.DepositAll;
+  wait(500, 1200);
+  Bank.OpenTab(Self.BankTab);
+  Bank.WithdrawItem(Self.CosmicItem, True);
+  WaitUntil(Inventory.ContainsItem('Cosmic Rune'), 200, 3000);
+  Inventory.Drag(0, 27);
+  Wait(1200, 1300);
+end;
+
+//WITHDRAW MATS
+procedure TEnchanter.WithdrawMats();
+begin
+  Bank.WithdrawItem(Self.BankItem, True);
+  WaitUntil(Inventory.ContainsItem(Self.Item), 200, 3000);
+end;
+
+procedure TEnchanter.Init(MaxActions: UInt32; MaxTime: UInt64); override;
+var
+  buttons : TRSButtonArray;
+  Inventory_ : TRSBankItemArray;
+  inventoryitems: TRSItemArray;
+  i: Int32;
+begin
+  Inherited;
+//INVENTORY
+  //SETUP BANK/INVENTORY + ADD REGIONS
+  repeat
+  begin
+    if Bank.Open(ERSBankLocation.CASTLE_WARS) then
+    begin
+
+    Self.RawItem := ('Abyssal Bracelet(5)');
+
+    Self.Bankitem := ['Diamond Bracelet', Bank.QUANTITY_ALL, False];
+    Self.Bankitem2 := ['Abyssal Bracelet(5)', Bank.QUANTITY_ALL, False];
+    Self.CosmicItem:= ['Cosmic rune', Bank.QUANTITY_ALL, False];
+    Self.BankTab := 4;
+    Self.Element:= 'Earth';
+
+      Inventory_ += TRSBankItem.Setup('Cosmic rune', 40, False);
+      Inventory_[0].Tab := 6; Inventory_[0].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Hammer', 1, False);
+      Inventory_[1].Tab := 6; Inventory_[1].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Digsite pendant (1)', 1, False);
+      Inventory_[2].Tab := 6; Inventory_[2].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Chisel', 1, False);
+      Inventory_[3].Tab := 6; Inventory_[3].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Yew logs', 4, False);
+      Inventory_[4].Tab := 6; Inventory_[4].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Ring of dueling(1)', 1, False);
+      Inventory_[5].Tab := 1; Inventory_[5].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Graceful hood', 1, False);
+      Inventory_[6].Tab := 0; Inventory_[6].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Graceful top', 1, False);
+      Inventory_[7].Tab := 0; Inventory_[7].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Graceful legs', 1, False);
+      Inventory_[8].Tab := 0; Inventory_[8].Scroll := 0;
+      Inventory_ += TRSBankItem.Setup('Graceful gloves', 1, False);
+      Inventory_[9].Tab := 0; Inventory_[9].Scroll := 0;
+
+
+      inventoryitems += 'Hammerstone seed';
+      inventoryitems += 'Hammer';
+      inventoryitems += 'Digsite pendant (1)';
+      inventoryitems += 'Chisel';
+      inventoryitems += 'Yew logs';
+      inventoryitems += 'Ring of dueling(1)';
+
+      for i := 0 to High(Inventory_) do
+      begin
+        if (Inventory_[i].Quantity = 1) then
+        begin
+          Bank.WithdrawItem(Inventory_[i], True);
+        end else
+        begin
+          Bank.WithdrawItem(Inventory_[i], False);
+        end;
+        Wait(0, 72);
+      end;
+    end else
+    begin
+      writeln(Self.rsw);
+      Self.RSW.webwalk([5166, 4115]);
+    end;
+  end;
+  Until Inventory.count >= 1;
+
+  for 1 to 5 do
+  begin
+    if Bank.Close() then
+    begin
+      WaitUntil(not Bank.IsOpen(),200, 800);
+      Break;
+    end;
+  end;
+
+  for 1 to 5 do
+  begin
+    if Inventory.open() then
+    begin
+      WaitUntil(Inventory.IsOpen(),200, 800);
+      break;
+    end;
+  end;
+
+  for i := 0 to High(Inventory_) do
+  begin
+    if not inventoryitems.Contains(Inventory_[i].Item) then
+    begin
+      Inventory.ClickItem(Inventory_[i].Item);
+      Wait(0, 72);
+    end;
+  end;
+  wait(200, 560);
+
+    Mouse.Speed := random(10, 13);
+    if Magic.Open() then
+    begin
+      if Magic.OpenFilters then
+      begin
+        buttons := Magic.GetFilterButtons();
+        buttons[4].Click(1);
+        WaitEx(500,70);
+      end;
+    end;
+    Self.PrevWasLazy := False; //Internal function
+    Self.HasStaff := False; //True if you are manually equipping the staff
+    Self.SetupAntiban();
+    WLSettings.RemoteInput.HUDReport := False;
+end;
+
+//CHAINER-RUN
+procedure TEnchanter.ChainerRun(maxActions, maxTime : int32);
+var
+  buttons : TRSButtonArray;
+begin
+  Enchanter.Init(maxactions, maxtime);
+  repeat
+    Enchanter.Run();
+    until (Enchanter.ActionLimit < Enchanter.TotalActions);
+
+  if Magic.Open() then
+  begin
+    if Magic.OpenFilters then
+    begin
+      buttons := Magic.GetFilterButtons();
+      buttons[4].Click(1);
+      WaitEx(500,70);
+    end;
+  end;
+
+
+  Bank.Open(ERSBankLocation.CASTLE_WARS);
+  WaitUntil(Bank.IsOpen(), 300, 6000);
+  Bank.DepositAll();
+  wait(300, 400);
+  Mouse.click([467, 299, 493, 325], 1);
+  Antiban.Tasks := [];
+  Antiban.Breaks := [];
+end;
+
+
+
+{$IFNDEF SCRIPT_CHAIN}
+begin
+  Enchanter.Init(800, -1);
+  repeat
+    Enchanter.Run();
+    until (Enchanter.ActionLimit < Enchanter.TotalActions);
+  Bank.DepositAll();
+end.
+{$ENDIF}

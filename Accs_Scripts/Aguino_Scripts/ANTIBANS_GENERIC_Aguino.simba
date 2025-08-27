@@ -1,0 +1,82 @@
+{$IFNDEF SCRIPT_CHAIN}
+  {$I SRL-T/OSR.simba}
+  {$I WaspLib/osr.simba}
+  {$DEFINE SRL_USE_REMOTEINPUT}
+{$ENDIF}
+
+
+  TRunner = record
+    //STATE
+    State                           : ERunnerState;
+
+    //OBJECTS
+    MushTree                        : TRSObject;
+    MushTree2                       : TRSObject;
+    Houses                          : array of THouse;
+    CurrentHouse                    : THouse;
+    Hole                            : TRSObject;
+
+    //VARIABLES AND TIMERS
+    HouseNumber                     : Int32;
+    TrueRunTime                     : TStopwatch;
+    ShutdownTime                    : Int64;
+    RunCompleted                    : Boolean;
+    isSetup                         : Boolean;
+
+    //RSW
+    RSW                             : TRSWalker;
+  end;
+
+// ANTIBANS
+
+//MAS AFK:
+procedure TSandyScript.SetupAntiban();
+begin
+  Antiban.AddTask(ONE_SECOND*45, @Mouse.RandomMovement);
+  Antiban.AddTask(ONE_MINUTE*3,  @Antiban.RandomRotate);
+  Antiban.AddTask(ONE_MINUTE*1,  @Antiban.DoLoseFocus);
+  Antiban.AddTask(ONE_MINUTE*5,  @Antiban.HoverMSItems);
+  Antiban.AddTask(ONE_MINUTE*8,  @Antiban.HoverMSNPCs);
+  Antiban.AddTask(ONE_MINUTE*10,  @Antiban.HoverMSPlayers);
+  Antiban.AddTask(ONE_MINUTE*15, @Antiban.DoSkillHover);
+  Antiban.AddTask(ONE_MINUTE*21, @Antiban.ToggleQPray);
+  Antiban.AddTask(ONE_MINUTE*47, @Antiban.ToggleAchievementTabs);
+  Antiban.AddBreak(ONE_MINUTE*60, ONE_MINUTE*4, 0.2, 0.4);
+  Antiban.AddBreak(ONE_MINUTE*30, ONE_MINUTE + 30000, 0.2, 0);
+end;
+
+//MEDIANO AFK:
+procedure TScript.SetupAntiban();
+begin
+  Antiban.Skills += //SCRIPT SKILL + algunas 2 mierdas
+
+
+  Antiban.AddTask(ONE_SECOND*45, @Mouse.RandomMovement);
+  Antiban.AddTask(ONE_MINUTE*5,  @Antiban.RandomRotate);
+  Antiban.AddTask(ONE_MINUTE*6,  @Antiban.Swivel);
+  Antiban.AddTask(ONE_MINUTE*6,  @Antiban.HoverMSItems);
+  Antiban.AddTask(ONE_MINUTE*8,  @Antiban.HoverMSNPCs);
+  Antiban.AddTask(ONE_MINUTE*7,  @Antiban.HoverMSPlayers);
+  Antiban.AddTask(ONE_MINUTE*7,  @Antiban.DoLoseFocus);
+  Antiban.AddTask(ONE_MINUTE*25, @Antiban.HoverSkills);
+  Antiban.AddBreak(ONE_MINUTE*30, ONE_SECOND*90, 0.4, 0.0);
+  Antiban.AddBreak(ONE_MINUTE*50, ONE_MINUTE*4, 0.4, 0.0);
+  Antiban.AddBreak(ONE_MINUTE*30, ONE_MINUTE*2, 0.4, 0.0);
+
+end;
+
+//MENOS AFK:
+procedure TSandyScript.SetupAntiban();
+begin
+  Antiban.Skills += //SKILL SCRIPTS
+
+  Antiban.AddTask(ONE_MINUTE*2,   @Mouse.RandomMovement);
+  Antiban.AddTask(ONE_MINUTE*4,   @Antiban.SmallCameraRotation);
+  Antiban.AddTask(ONE_MINUTE*6,   @Antiban.HoverMSPlayers);
+  Antiban.AddTask(ONE_MINUTE*12,   @Antiban.DoLoseFocus);
+  Antiban.AddTask(ONE_MINUTE*9,   @Antiban.RandomRotate);
+  Antiban.AddTask(ONE_MINUTE*10,   @Antiban.HoverMSNPCs);
+  Antiban.AddTask(ONE_MINUTE*25,  @Antiban.HoverSkills);
+  Antiban.AddBreak(ONE_MINUTE*30, ONE_SECOND*90, 0.5, 0.0);
+  Antiban.AddBreak(ONE_MINUTE*50, ONE_MINUTE*4, 0.5, 0.0);
+end;
